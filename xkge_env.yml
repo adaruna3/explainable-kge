@@ -1,0 +1,16 @@
+name: xkge_env
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.6
+  - pytorch=1.2.0
+  - torchvision=0.4.0
+  - pandas
+  - future
+  - tensorboard
+  - matplotlib
+  - statsmodels
+  - numpy
+  - scikit-learn
+  - omegaconf
