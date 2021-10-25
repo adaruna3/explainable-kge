@@ -10,6 +10,7 @@ from argparse import ArgumentParser
 import pandas as pd
 from statsmodels.stats.anova import AnovaRM
 import statsmodels.stats.multicomp as multi
+from sklearn.metrics import f1_score, accuracy_score
 
 # for plotting
 import matplotlib.pyplot as plt
@@ -1226,6 +1227,32 @@ def get_avg_plots(datasets, models, methods, avg_name="", num_exp=5, num_sess=5)
             avg_hit_i_bplot, avg_hit_f_bplot, avg_hit_bplot,
             avg_mrr_i_lplot, avg_mrr_f_lplot, avg_hit_i_lplot, avg_hit_f_lplot,
             mrr_acclca_scatter, hit_acclca_scatter, mrr_accms_scatter, hit_accms_scatter]
+
+
+def plot_ex_results(results, r2i):
+    f1s = []
+    fids = []
+    covs = []
+    for rel in r2i.keys():
+        if "reverse" in rel:
+            continue
+        rel_results = results.loc[results["rel"].isin([rel]),:]
+        coverage = float(rel_results.shape[0] - rel_results["predict"].isin([0]).sum()) / float(rel_results.shape[0])
+        rel_pred_results = rel_results.loc[rel_results["predict"].isin([1,-1]),:]
+        fidelity = accuracy_score(rel_pred_results["label"].to_numpy(np.int), rel_pred_results["predict"].to_numpy(np.int))
+        f1_fidelity = f1_score(rel_pred_results["label"].to_numpy(np.int), rel_pred_results["predict"].to_numpy(np.int))
+        logout("For relation " + rel + " coverage is " + str(coverage), "s")
+        logout("For relation " + rel + " fidelity is " + str(fidelity), "s")
+        logout("For relation " + rel + " f1-fidelity is " + str(f1_fidelity), "s")
+        f1s.append(f1_fidelity)
+        fids.append(fidelity)
+        covs.append(coverage)
+    logout("Coverage Mean: " + str(np.mean(covs)), "s")
+    logout("Coverage Std: " + str(np.std(covs)), "s")
+    logout("Fidelity Mean: " + str(np.mean(fids)), "s")
+    logout("Fidelity Std: " + str(np.std(fids)), "s")
+    logout("F1-Fidelity Mean: " + str(np.mean(f1s)), "s")
+    logout("F1-Fidelity Std: " + str(np.std(f1s)), "s")
 
 
 if __name__ == "__main__":

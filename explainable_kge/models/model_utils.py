@@ -1,3 +1,4 @@
+import enum
 from os.path import abspath, dirname
 import numpy as np
 from copy import copy, deepcopy
@@ -321,14 +322,6 @@ def init_model(args):
                                 args["train"]["label_smooth_rate"],
                                 device,
                                 **args["model"]["arch"])
-    elif "gruvae" in args["model"]["name"]:
-        e_dim, h_dim, z_dim, a_slope, a_pos, a_max = args["continual"]["gruvae_args"][5:]
-        encoder = dgr_models.GRUEncoder(int(e_dim), int(h_dim), int(z_dim),
-                                        args["model"]["num_ents"] + args["model"]["num_rels"] + 2, device)
-        decoder = dgr_models.GRUDecoder(int(z_dim), int(h_dim), int(e_dim),
-                                        args["model"]["num_ents"] + args["model"]["num_rels"] + 2, device)
-        model = dgr_models.TripleGRUVAE(encoder, decoder, args["model"]["sot"], args["model"]["eot"], device,
-                                        float(a_slope), float(a_pos), float(a_max))
     else:
         logout("The model '" + str(args.model) + "' to be used is not implemented.", "f")
         exit()
@@ -483,6 +476,98 @@ class EarlyStopTracker:
     def get_best(self):
         return self.best_performances, self.best_epoch
 
+
+def get_rel_thresholds(args, model):
+    """
+    Searches for best classification threshold to use for each relation type
+    :param args: experiment config args
+    :param model: pytorch nn.Module KGE object
+    :return: classification thresholds {"relation_name": threshold}
+    """
+    # collect set of positive/negative triples from training and validation sets
+    train_args = copy(args)
+    train_args["dataset"]["set_name"] = "0_train2id"
+    train_args["continual"]["session"] = 0
+    train_args["dataset"]["neg_ratio"] = 1
+    tr_dataset = load_dataset(train_args)
+    tr_dataset.load_corrupt_domains()
+    tr_dataset.load_known_ent_set()
+    tr_dataset.load_known_rel_set()
+    tr_dataset.reverse = False
+    labeled_triples = np.concatenate([tr_dataset[i] for i in range(len(tr_dataset))], axis=0)
+    p_triples = labeled_triples[labeled_triples[:,-1]==1,:3]
+    n_triples = labeled_triples[labeled_triples[:,-1]==-1,:3]
+    dev_args = copy(args)
+    dev_args["continual"]["session"] = 0
+    dev_args["dataset"]["set_name"] = "0_valid2id"
+    de_p_d = load_dataset(dev_args)
+    de_p_d.triples = np.unique(np.concatenate((de_p_d.triples, p_triples), axis=0), axis=0)
+    de_p_d.reverse = False
+    dev_args["dataset"]["set_name"] = "0_valid2id_neg"
+    de_n_d = load_dataset(dev_args)
+    de_n_d.triples = np.unique(np.concatenate((de_n_d.triples, n_triples), axis=0), axis=0)
+    de_n_d.reverse = False
+    # get scores for each positive/negative triples from embedding
+    if args["cuda"]:
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    collate_fn = collate_tucker_batch if args["model"]["name"] == "tucker" else collate_batch
+    model.eval()
+    p_scores = np.zeros(shape=(0))
+    n_scores = np.zeros(shape=(0))
+    for i, de_d in enumerate([de_p_d, de_n_d]):
+        data_loader = DataLoader(de_d, shuffle=False, pin_memory=True, collate_fn=collate_fn,
+                                 batch_size=args["train"]["batch_size"],
+                                 num_workers=args["train"]["num_workers"])
+        with torch.no_grad():
+            for idx_b, batch in enumerate(data_loader):
+                bh, br, bt, _ = batch
+                if args["model"]["name"] == "tucker":
+                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt].cpu().detach().numpy()
+                else:
+                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
+                if i:
+                    n_scores = np.append(n_scores, scores)
+                else:
+                    p_scores = np.append(p_scores, scores)
+    # find best thresholds for each relation type
+    rel_thresholds = {}
+    rel_accs = {}
+    for rel, rel_id in de_p_d.r2i.items():
+        # count total +/- triples in set
+        total = np.count_nonzero(de_p_d.triples[:,1]==rel_id)
+        total += np.count_nonzero(de_n_d.triples[:,1]==rel_id)
+        # get range of +/- scores
+        min_score = float("inf")
+        max_score = -float("inf")
+        max_p_score = np.max(p_scores[de_p_d.triples[:,1]==rel_id])
+        if max_p_score > max_score: max_score = max_p_score
+        min_p_score = np.min(p_scores[de_p_d.triples[:,1]==rel_id])
+        if min_p_score < min_score: min_score = min_p_score
+        max_n_score = np.max(n_scores[de_n_d.triples[:,1]==rel_id])
+        if max_n_score > max_score: max_score = max_n_score
+        min_n_score = np.min(n_scores[de_n_d.triples[:,1]==rel_id])
+        if min_n_score < min_score: min_score = min_n_score
+        # approximate best threshold
+        n_interval = 1000
+        interval = (max_score - min_score) / n_interval
+        best_threshold = min_score + 0 * interval
+        best_acc = 0.0
+        for i in range(0, n_interval+1):
+            temp_threshold = min_score + i * interval
+            correct = np.count_nonzero(p_scores[de_p_d.triples[:,1]==rel_id] > temp_threshold)
+            correct += np.count_nonzero(n_scores[de_n_d.triples[:,1]==rel_id] < temp_threshold)
+            temp_acc = 1.0 * correct / (total * 2.0)
+            if temp_acc > best_acc:
+                best_acc = copy(temp_acc)
+                best_threshold = copy(temp_threshold)
+        rel_thresholds[rel_id] = best_threshold
+        rel_accs[rel] = best_acc
+    logout("Classification mean acc: " + str(np.mean([acc for acc in rel_accs.values()])), "s")
+    logout("Classification acc std: " + str(np.std([acc for acc in rel_accs.values()])), "s")
+    return rel_thresholds
 
 
 if __name__ == "__main__":

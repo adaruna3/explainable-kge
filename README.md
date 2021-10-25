@@ -22,11 +22,12 @@ be working.
 
 
 ## ToDos
-I. Debug & clean basic pipeline
-    c. Clean and organize the codebase
-    d. Commit all code
+II. Sanity checks    
+    b. remove the reverse relations
+    c. update PRA version and add to repo
 II. Add toggle for using decision tree
     a. How to generate dataset
 III. Add toggle for enrich the knowledge graph
     a. add reverse and similarity relations to specific entities
-IV. 
+IV. Add methods to corrupt the dataset
+V. Check explanations coming out of corrupted dataset
