@@ -66,4 +66,4 @@ continual:
   enable_offline: False
 explain:
   xmodel: "logit"
-  locality: "global"
+  locality: "local"

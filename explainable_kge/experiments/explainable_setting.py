@@ -84,10 +84,10 @@ if __name__ == "__main__":
     if not os.path.exists(ghat_fp):
         x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, ghat_fp)
     # 2. Run SFE on G^
-    sfe_fp = os.path.join(exp_fp, "results")
+    sfe_fp = os.path.join(exp_fp, "results", exp_config["model"]["name"])
     if not os.path.exists(sfe_fp):
         split_fp = os.path.join(exp_fp, "splits")
-        split_name = exp_config["explain"]["xmodel"]
+        split_name = exp_config["model"]["name"]
         x_utils.run_sfe(exp_config, exp_model, device, 
                         rel_thresholds, tr_de_d.i2e, tr_de_d.i2r, 
                         split_fp, split_name, ghat_fp, exp_fp)

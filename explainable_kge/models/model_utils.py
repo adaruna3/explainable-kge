@@ -559,14 +559,15 @@ def get_rel_thresholds(args, model):
             temp_threshold = min_score + i * interval
             correct = np.count_nonzero(p_scores[de_p_d.triples[:,1]==rel_id] > temp_threshold)
             correct += np.count_nonzero(n_scores[de_n_d.triples[:,1]==rel_id] < temp_threshold)
-            temp_acc = 1.0 * correct / (total * 2.0)
+            temp_acc = 1.0 * correct / total
             if temp_acc > best_acc:
                 best_acc = copy(temp_acc)
                 best_threshold = copy(temp_threshold)
         rel_thresholds[rel_id] = best_threshold
         rel_accs[rel] = best_acc
-    logout("Classification mean acc: " + str(np.mean([acc for acc in rel_accs.values()])), "s")
-    logout("Classification acc std: " + str(np.std([acc for acc in rel_accs.values()])), "s")
+    logout("Classification ACC \{'rel':acc\}: " + str(rel_accs), "d")
+    logout("Classification mean ACC: " + str(np.mean([acc for acc in rel_accs.values()])), "s")
+    logout("Classification ACC std: " + str(np.std([acc for acc in rel_accs.values()])), "s")
     return rel_thresholds
 
 
