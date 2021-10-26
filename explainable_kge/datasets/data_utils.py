@@ -12,7 +12,7 @@ import pdb
 
 
 class TripleDataset(Dataset):
-    def __init__(self, dataset_name, neg_ratio=0, neg_type="random", reverse=False, session=0):
+    def __init__(self, dataset_name, neg_ratio=0, neg_type="random", reverse=False, model_name="tucker", session=0):
         """
         Represents a triples dataset
         :param dataset_name: dataset folder name
@@ -22,6 +22,7 @@ class TripleDataset(Dataset):
         self.fp = datasets_fp + dataset_name + "/"
         self.neg_ratio = neg_ratio
         self.reverse = reverse
+        self.model_name = model_name
         self.session = session
         self.e2i, self.i2e = self.load_id_map(str(session) + "_entity2id.txt")
         self.r2i, self.i2r = self.load_id_map(str(session) + "_relation2id.txt")
@@ -80,7 +81,7 @@ class TripleDataset(Dataset):
             names = [names]
         self.triples = self.load_triples([name + ".txt" for name in names])
         self.load_bernouli_sampling_stats()
-        if self.reverse:
+        if self.model_name == "tucker":
             self.reload_er_vocab()
 
     def load_triples(self, triples_files):
@@ -222,7 +223,7 @@ class TripleDataset(Dataset):
         Used by dataloader, returns set size
         :return: triples set size
         """
-        if self.reverse:
+        if self.model_name == "tucker":
             return len(self.er_vocab_pairs)
         else:
             return self.triples.shape[0]
@@ -233,7 +234,7 @@ class TripleDataset(Dataset):
         :return: training triples sample
         """
         # modify label behavior for when using tucker
-        if self.reverse:
+        if self.model_name == "tucker":
             # positives and negatives together
             h_i, r_i = self.er_vocab_pairs[idx]
             targets = np.zeros(dtype=np.int32, shape=(1, len(self.e2i)))

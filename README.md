@@ -22,9 +22,6 @@ be working.
 
 
 ## ToDos
-II. Sanity checks    
-    b. remove the reverse relations
-    c. update PRA version and add to repo
 II. Add toggle for using decision tree
     a. How to generate dataset
 III. Add toggle for enrich the knowledge graph

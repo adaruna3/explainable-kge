@@ -13,7 +13,7 @@ dataset:
   # Negative sampling type (random or type_constrained)
   neg_type: "type_constrained"
   # Whether to add reverse triples to dataset (bool)
-  reverse: True
+  reverse: False
 model:
   # Model type (transe, analogy, or tucker)
   name: tucker
@@ -66,4 +66,4 @@ continual:
   enable_offline: False
 explain:
   xmodel: "logit"
-  locality: "local"
+  locality: "global"

@@ -31,11 +31,11 @@ def setup_experiment(args):
     tr_de_dataset.triples = np.unique(np.concatenate((tr_dataset.triples,
                                                       de_dataset.triples), axis=0), axis=0)
     tr_de_dataset.load_bernouli_sampling_stats()
-    if args["dataset"]["reverse"]:
+    if args["model"]["name"] == "tucker":
         tr_de_dataset.reload_er_vocab()
     tr_de_dataset.load_current_ents_rels()
     tr_de_dataset.load_current_ents_rels()
-    tr_de_dataset.reverse = False
+    tr_de_dataset.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
 
     # loads trained embedding model
     model_optim_args = copy(args)
@@ -91,7 +91,7 @@ if __name__ == "__main__":
         x_utils.run_sfe(exp_config, exp_model, device, 
                         rel_thresholds, tr_de_d.i2e, tr_de_d.i2r, 
                         split_fp, split_name, ghat_fp, exp_fp)
-    # 3. Train local explainable model for each test triple
+    # 3. Train explainable model to predict each test triple
     results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"]))
     if not os.path.exists(results_fp):
         results = x_utils.get_explainable_results(exp_config, knn, 

@@ -27,6 +27,7 @@ def load_dataset(cmd_args):
                                        cmd_args["dataset"]["neg_ratio"],
                                        cmd_args["dataset"]["neg_type"],
                                        cmd_args["dataset"]["reverse"],
+                                       cmd_args["model"]["name"],
                                        cmd_args["continual"]["session"])
     dataset.load_triple_set(cmd_args["dataset"]["set_name"])
     dataset.load_current_ents_rels()
@@ -40,13 +41,15 @@ class TrainBatchProcessor:
         self.args = copy(cmd_args)
         self.dataset = data_utils.TripleDataset(self.args["dataset"]["name"], 
                                                 self.args["dataset"]["neg_ratio"],
+                                                self.args["dataset"]["neg_type"],
                                                 self.args["dataset"]["reverse"],
+                                                self.args["model"]["name"],
                                                 self.args["continual"]["session"])
         self.dataset.load_triple_set(self.args["dataset"]["set_name"])
         self.dataset.load_known_ent_set()
         self.dataset.load_known_rel_set()
         self.dataset.load_current_ents_rels()
-        collate_fn = collate_tucker_batch if self.args["dataset"]["reverse"] else collate_batch
+        collate_fn = collate_tucker_batch if self.args["model"]["name"] == "tucker" else collate_batch
         self.data_loader = DataLoader(self.dataset,
                                       shuffle=True,
                                       batch_size=self.args["train"]["batch_size"],
@@ -59,7 +62,7 @@ class TrainBatchProcessor:
             self.device = torch.device("cpu")
 
     def reset_data_loader(self):
-        collate_fn = collate_tucker_batch if self.args["dataset"]["reverse"] else collate_batch
+        collate_fn = collate_tucker_batch if self.args["model"]["name"] == "tucker" else collate_batch
         self.data_loader = DataLoader(self.dataset,
                                       shuffle=True,
                                       batch_size=self.args["train"]["batch_size"],
@@ -82,7 +85,7 @@ class TrainBatchProcessor:
                                         bt.contiguous().to(self.device),
                                         by.contiguous().to(self.device))
             except:
-                pdb.set_trace()
+                pdb.setbh_trace()
             batch_loss.backward()
             optimizer.step()
             total_loss += batch_loss.item()
@@ -94,13 +97,15 @@ class DevBatchProcessor:
         self.args = copy(cmd_args)
         self.dataset = data_utils.TripleDataset(self.args["dataset"]["name"], 
                                                 self.args["dataset"]["neg_ratio"],
+                                                self.args["dataset"]["neg_type"],
                                                 self.args["dataset"]["reverse"],
+                                                self.args["model"]["name"],
                                                 self.args["continual"]["session"])
         self.dataset.load_triple_set(self.args["dataset"]["set_name"])
         self.dataset.load_mask(self.args["dataset"]["dataset_fps"])
         self.dataset.load_known_ent_set()
         self.dataset.load_known_rel_set()
-        self.dataset.reverse = False  # makes __getitem__ only retrieve triples instead of triple pairs
+        self.dataset.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
         collate_fn = collate_batch
         self.data_loader = DataLoader(self.dataset,
                                       shuffle=False,
@@ -131,7 +136,7 @@ class DevBatchProcessor:
 
                 # get ranks for each triple in the batch
                 bh, br, bt, by = batch
-                if self.args["dataset"]["reverse"]:
+                if self.args["model"]["name"] == "tucker":
                     # get tucker ranks
                     ranks = np.append(ranks, self._rank_tucker(model, bh, br, bt), axis=0)
                 else:
@@ -493,7 +498,7 @@ def get_rel_thresholds(args, model):
     tr_dataset.load_corrupt_domains()
     tr_dataset.load_known_ent_set()
     tr_dataset.load_known_rel_set()
-    tr_dataset.reverse = False
+    tr_dataset.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
     labeled_triples = np.concatenate([tr_dataset[i] for i in range(len(tr_dataset))], axis=0)
     p_triples = labeled_triples[labeled_triples[:,-1]==1,:3]
     n_triples = labeled_triples[labeled_triples[:,-1]==-1,:3]
@@ -502,11 +507,11 @@ def get_rel_thresholds(args, model):
     dev_args["dataset"]["set_name"] = "0_valid2id"
     de_p_d = load_dataset(dev_args)
     de_p_d.triples = np.unique(np.concatenate((de_p_d.triples, p_triples), axis=0), axis=0)
-    de_p_d.reverse = False
+    de_p_d.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
     dev_args["dataset"]["set_name"] = "0_valid2id_neg"
     de_n_d = load_dataset(dev_args)
     de_n_d.triples = np.unique(np.concatenate((de_n_d.triples, n_triples), axis=0), axis=0)
-    de_n_d.reverse = False
+    de_n_d.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
     # get scores for each positive/negative triples from embedding
     if args["cuda"]:
         device = torch.device("cuda")
