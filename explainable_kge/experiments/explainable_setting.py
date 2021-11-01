@@ -51,7 +51,7 @@ def setup_experiment(args):
     model = model_utils.load_model(model_optim_args, model)
 
     # makes experiment path
-    fp = os.path.join("explainable_kge/logger/logs", args["dataset"]["name"] + "_" + args["model"]["name"])
+    fp = os.path.join("explainable_kge/logger/logs", args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(args["logging"]["log_num"]))
     if not os.path.exists(fp):
         os.makedirs(fp)
     fp = os.path.abspath(fp)
@@ -76,13 +76,13 @@ if __name__ == "__main__":
     #     a. For each training triple, perturb with NN to be all possible triples in G^
     ent_embeddings = exp_model.E.weight.cpu().detach().numpy()
     ent_embeddings = ent_embeddings / np.linalg.norm(ent_embeddings, ord=2, axis=1, keepdims=True)
-    knn = x_utils.get_ent_embedding_knn(ent_embeddings, tr_de_d.e2i, k=10)
+    knn = x_utils.get_typed_knn(ent_embeddings, tr_de_d.e2i, k=exp_config["explain"]["knn_k"])
     #     b. Prepare to classify triples as T/F with embedding
     rel_thresholds = model_utils.get_rel_thresholds(exp_config, exp_model)
     #     c. Form G^ from all T triples classified by embedding
     ghat_fp = os.path.join(exp_fp, "ghat.tsv")
     if not os.path.exists(ghat_fp):
-        x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, ghat_fp)
+        x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, ghat_fp, max_neighbors=exp_config["explain"]["ghat_k"])
     # 2. Run SFE on G^
     sfe_fp = os.path.join(exp_fp, "results")
     if not os.path.exists(os.path.join(sfe_fp,exp_config["model"]["name"])):
@@ -92,13 +92,12 @@ if __name__ == "__main__":
                         rel_thresholds, tr_de_d.i2e, tr_de_d.i2r, 
                         split_fp, split_name, ghat_fp, exp_fp)
     # 3. Train explainable model to predict each test triple
-    results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"]))
+    results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + str(exp_config["explain"]["locality_k"])))
     if not os.path.exists(results_fp):
-        results = x_utils.get_explainable_results(exp_config, knn, 
+        results = x_utils.get_explainable_results(exp_config, knn, exp_config["explain"]["locality_k"],
                                                   tr_de_d.r2i, tr_de_d.e2i, tr_de_d.i2e,
-                                                  sfe_fp, results_fp)
+                                                  sfe_fp, results_fp, ent_embeddings)
     else:
         with open(results_fp, "rb") as f:
             results = pickle.load(f)
-    viz_utils.plot_ex_results(results, tr_de_d.r2i)
-    pdb.set_trace()
+    viz_utils.get_summary(results)

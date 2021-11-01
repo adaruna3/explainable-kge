@@ -21,7 +21,7 @@ from explainable_kge.logger.terminal_utils import logout
 import pdb
 
 
-def get_ent_embedding_knn(ent_embeddings, e2i=None, k=10):
+def get_typed_knn(ent_embeddings, e2i=None, k=10):
     """
     Provides k nearest neighbors of entities in embedding space
     :param ent_embeddings:
@@ -44,9 +44,15 @@ def get_ent_embedding_knn(ent_embeddings, e2i=None, k=10):
         for row_id in range(knn_indices.shape[0]):
             row = knn_indices[row_id]
             knn[same_type_ents[row[0]]] = [same_type_ents[row[i]] for i in range(row.shape[0])]
-    logout("KNN learning finished.","s")
+    logout("Typed KNN learning finished.","s")
     return knn
 
+
+def get_knn(embeddings):
+    num_cpu = multiprocessing.cpu_count()
+    nbrs = NearestNeighbors(n_neighbors=embeddings.shape[0], n_jobs=num_cpu, metric="euclidean").fit(embeddings)
+    return nbrs.kneighbors(embeddings)
+    
 
 def get_batch_from_generator(triples_iter, batch_size):
     batch_heads = []
@@ -353,10 +359,52 @@ def explain_example(ex_fp, rel, example_num, feats, feat_names, coeff, head, tai
     final_reasons.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
 
 
-def get_explainable_results(args, knn, r2i, e2i, i2e, sfe_fp, results_fp):
-    exp_name = "explanations" + "_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"]
-    results = pd.DataFrame(columns=["rel", "sample", "label", "predict"])
-    train_stats = pd.DataFrame(columns=["rel","avg_train_size","train_size_std"])
+def get_local_data1(head, tail, tr_heads, tr_tails, toggle='tail'):
+    """ select train instances with same tail or same head as test """
+    indices = []
+    if toggle == "tail":
+        indices.extend(np.where(tr_tails == tail)[0])
+    else:
+        indices.extend(np.where(tr_heads == head)[0])
+    return indices
+
+
+def get_local_data2(knn, k, te_head, te_tail, tr_heads, tr_tails, e2i, i2e):
+    """ get # nearest neighbor HEADS/TAILS in training set weighted by embedding """
+    nbr_heads = knn[e2i[te_head]][1:k]
+    nbr_tails = knn[e2i[te_tail]][1:k]
+    examples_indices = []
+    for head_id in nbr_heads:
+        examples_indices.extend(np.where(tr_heads == i2e[head_id])[0])
+    for tail_id in nbr_tails:
+        examples_indices.extend(np.where(tr_tails == i2e[tail_id])[0])
+    return examples_indices
+
+
+def get_local_data3(head, tail, tr_heads, tr_tails, embeddings, e2i, locality, mask):
+    """ get # nearest neighbor TRIPLES in training set weighted by the embedding """
+    # get weights for train heads/tails w.r.t. test head/tail
+    heads = np.insert(tr_heads, 0 , head)
+    head_embeddings = np.asarray([embeddings[e2i[h],:] for h in heads])
+    dist, idxs = get_knn(head_embeddings)
+    head_dists = [None] * len(heads)
+    for i, h in enumerate(heads): head_dists[idxs[0,i]] = dist[0,i]
+    tails = np.insert(tr_tails, 0 , tail)
+    tail_embeddings = np.asarray([embeddings[e2i[t],:] for t in tails])
+    dist, idxs = get_knn(tail_embeddings)
+    tail_dists = [None] * len(tails)
+    for i, t in enumerate(tails): tail_dists[idxs[0,i]] = dist[0,i]
+    # select k most relevant examples based on combined head/tail weights
+    assert len(heads) == len(tails)
+    example_dists = [head_dists[i] + tail_dists[i] for i in range(len(heads))]
+    example_idxs = np.argsort(example_dists)
+    masked_example_idxs = example_idxs[np.insert(mask, 0, False)[example_idxs]]
+    return masked_example_idxs[:locality]-1
+
+
+def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, embeddings):
+    exp_name = "explanations" + "_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(args["explain"]["locality_k"])
+    results = pd.DataFrame(columns=["rel", "sample", "label", "predict", "train_size", "params"])
     for rel, rel_id in r2i.items():
     #     a. Load the extracted SFE features/labels
         print("Working on " + str(rel))
@@ -376,29 +424,39 @@ def get_explainable_results(args, knn, r2i, e2i, i2e, sfe_fp, results_fp):
         feature_names = v.get_feature_names()
         te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(test_fp)
         test_x = v.transform(te_feat_dicts)
-        skip = False
         fit_model = True
-        train_size = []
     #     b. Sample local training set for each test triple
         for test_idx, test_pair in tqdm.tqdm(enumerate(zip(te_heads, te_tails))):
             te_head, te_tail = test_pair
-            if args["explain"]["locality"] == "local":
-                nbr_heads = knn[e2i[te_head]]
-                nbr_tails = knn[e2i[te_tail]]
-                # get the corresponding training examples
-                examples_indices = []
-                for head_id in nbr_heads[1:]:
-                    examples_indices.extend(np.where(tr_heads == i2e[head_id])[0])
-                for tail_id in nbr_tails[1:]:
-                    examples_indices.extend(np.where(tr_tails == i2e[tail_id])[0])
-                # get features
-                train_x_local = train_x[examples_indices, :]
-                # get labels or scores
-                train_y_local = tr_y[examples_indices]
-            else:
+            # prepares xmodel train data
+            if args["explain"]["locality"] == "global":
                 train_x_local = train_x
                 train_y_local = tr_y
-            train_size.append(train_x_local.shape[0])
+            else:
+                # various methods for selecting subgraph g to sample
+                if args["explain"]["locality"] == "local1":
+                    examples_indices = get_local_data1(te_head, te_tail, tr_heads, tr_tails)
+                elif args["explain"]["locality"] == "local2":
+                    examples_indices = get_local_data2(knn, k, te_head, te_tail, tr_heads, tr_tails, e2i, i2e)
+                elif args["explain"]["locality"] == "local3":
+                    pos_mask = tr_y == 1
+                    neg_mask = tr_y == -1
+                    min_examples = min(np.count_nonzero(pos_mask), np.count_nonzero(neg_mask))
+                    locality = min(args["explain"]["locality_k"], min_examples)
+                    pos = get_local_data3(te_head, te_tail, tr_heads, tr_tails, embeddings, 
+                                          e2i, locality, pos_mask)
+                    neg = get_local_data3(te_head, te_tail, tr_heads, tr_tails, embeddings, 
+                                          e2i, locality, neg_mask)
+                    examples_indices = np.append(pos, neg)
+                examples_indices = np.unique(examples_indices)
+                # get features and labels
+                try:
+                    train_x_local = train_x[examples_indices, :]
+                    train_y_local = tr_y[examples_indices]
+                except IndexError:
+                    results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
+                                              "predict": 0, "train_size": None, "params": None}, ignore_index=True)
+                    continue
     #     c. Train logit model using scikit-learn
             n_jobs = multiprocessing.cpu_count()
             param_grid_logit = [{
@@ -410,32 +468,36 @@ def get_explainable_results(args, knn, r2i, e2i, i2e, sfe_fp, results_fp):
                 'tol': [1e-3],
                 'class_weight': ["balanced"],
                 'n_jobs': [n_jobs],
+                'random_state': [1],
             }]
-            if len(np.unique(train_y_local)) <= 1:
-                print("Not possible to train explainable model in triple `{}` because training set contains a single class.".format(str(test_pair)))
-                skip = True
-            else:
-                for class_ in np.unique(train_y_local):
-                    if len(train_y_local[train_y_local==class_]) < 3:
-                        print("Not possible to train explainable model in relation `{}` because training set contains too few examples for one of the classes.".format(str(test_pair)))
-                        print("Class: " + str(class_) + " has only " + str(len(train_y_local[train_y_local==class_])) + " examples")
-                        skip = True
-            if skip:
-                results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], "predict": 0}, ignore_index=True)
-                skip = False
+            # checks if training feasible
+            classes, counts = np.unique(train_y_local, return_counts=True)
+            if len(classes) <= 1:
+                logout("Cannot train for `{}` because singular class.".format(str(test_pair)), "w")
+                results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
+                                         "predict": 0, "train_size": None, "params": None}, ignore_index=True)
                 continue
+            else:
+                if min(counts) < 2:
+                    logout("Cannot train for `{}` because less then 3 examples in a class.".format(str(test_pair)), "w")
+                    results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
+                                             "predict": 0, "train_size": None, "params": None}, ignore_index=True)
+                    continue
             if fit_model:
-                gs = GridSearchCV(SGDClassifier(), param_grid_logit, n_jobs=n_jobs, refit=True, cv=5)
+                num_folds = min(5, min(counts))
+                gs = GridSearchCV(SGDClassifier(), param_grid_logit, n_jobs=n_jobs, refit=True, cv=num_folds)
                 gs.fit(train_x_local, train_y_local)
                 xmodel = gs.best_estimator_
             prediction = xmodel.predict(test_x[test_idx]).item()
-            explain_example(os.path.join(sfe_fp,exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
-            results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], "predict": prediction}, ignore_index=True)
+            explain_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
+            results = results.append({"rel": rel,
+                                      "sample": test_pair,
+                                      "label": te_y[test_idx],
+                                      "predict": prediction,
+                                      "train_size": train_x_local.shape,
+                                      "params": str(gs.best_params_)}, ignore_index=True)
             if args["explain"]["locality"] == "global":
                 fit_model = False
-        train_stats = train_stats.append({"rel": rel, "avg_train_size": np.mean(train_size), "train_size_std": np.std(train_size)}, ignore_index=True)
-    train_stats_fp = os.path.join(sfe_fp,args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_trainstats.tsv")
-    train_stats.to_csv(train_stats_fp, index=False, sep='\t')
     with open(results_fp, "wb") as f:
         pickle.dump(results, f)
     logout("Finished getting xmodel results", "s")

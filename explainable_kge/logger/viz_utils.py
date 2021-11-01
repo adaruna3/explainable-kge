@@ -2,9 +2,8 @@ import os
 from copy import copy
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-from scipy import integrate
-from math import isnan
-from argparse import ArgumentParser
+from math import sqrt
+import pickle
 
 # for stats tests
 import pandas as pd
@@ -24,12 +23,15 @@ from matplotlib.transforms import Affine2D
 from matplotlib.colors import to_rgba
 
 # for terminal logging
-from explainable_kge.logger.terminal_utils import logout
+from explainable_kge.logger.terminal_utils import logout, load_config
 
 
 import pdb
 
 
+###########################################################
+# TensorBoard Visualizations during training
+###########################################################
 class AbstractProcessorViz:
     def __init__(self, args):
         log_name = str(args["logging"]["tag"]) + "__"
@@ -87,7 +89,9 @@ class ProcessorViz(AbstractProcessorViz):
         self._writer.add_scalar("GRUVAE/UPrecision", u_precision, self.gruvae_timestamp)
         self._writer.add_scalar("GRUVAE/Coverage", coverage, self.gruvae_timestamp)
 
-
+###########################################################
+# Generic plotting
+###########################################################
 def plot_bar(values, names, colors=None, ylabel=None, title=None, ylim=None, yerr=None):
     fig, ax = plt.subplots(1, 1)
     bar = ax.bar(x=range(len(values)), height=values, color=colors, yerr=yerr)
@@ -220,7 +224,7 @@ def plot_line(xvalues, yvalues, names, colors, linestyles,
         lines.append(line)
 
     ax.legend(lines, names,
-              loc='upper left',
+              loc='best',
               ncol=1, fancybox=True, shadow=True)
 
     if ylim is not None:
@@ -467,6 +471,21 @@ def plot_scatter(xvalues, yvalues, names, colors, linestyles,
     return fig
 
 
+def plot_hist(values, bins=None, color=None, ylabel=None, title=None, ylim=None):
+    fig, ax = plt.subplots(1, 1)
+    hist = ax.hist(x=values, bins=bins, facecolor=color, alpha=0.75)
+    plt.grid(True)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
+    if title is not None:
+        ax.set_title(title)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    return fig
+
+
 def figs2pdf(figs, filepath):
     pdf = PdfPages(filepath)
     for fig in figs:
@@ -474,86 +493,10 @@ def figs2pdf(figs, filepath):
     pdf.close()
 
 
-def csvlogs2plots_format_inference(filepath):
-    logout("Loading data for :" + str(filepath))
-    num_sessions = 5
-    stage2idx = {"t": 1}
-    metrics = np.zeros(shape=(2, 2, num_sessions, num_sessions))
-    with open(filepath, "r") as f:
-        for line in f:
-            parsed_line = line.strip().split(",")
-
-            if parsed_line[1] == "t":
-                inference_values = np.asarray([float(value) for value in parsed_line[5:-1]]).reshape((5, 2))
-                for i_row in range(inference_values.shape[0]):
-                    for i_col in range(inference_values.shape[1]):
-                        metrics[stage2idx[parsed_line[1]], i_col, i_row, int(parsed_line[0])] = \
-                            inference_values[i_row, i_col]
-    return metrics
-
-
-def csvlogs2plots_format_noninference(filepath):
-    logout("Loading data for :" + str(filepath))
-    num_sessions = 5
-    stage2idx = {"i": 0, "f": 1}
-    LCs = []
-    LC = np.ndarray(shape=(0, 2))
-    conv = np.ndarray(shape=(1, 0))
-    model_sizes = np.ndarray(shape=(1, 0))
-    sample_sizes = np.ndarray(shape=(1, 0))
-    gruvae_conv = np.ndarray(shape=(1, 0))
-    gruvae_model_sizes = np.ndarray(shape=(1, 0))
-    metrics = np.zeros(shape=(2, 2, num_sessions, num_sessions))
-    with open(filepath, "r") as f:
-        for line in f:
-            parsed_line = line.strip().split(",")
-
-            if parsed_line[1] == "g":
-                gruvae_conv = np.append(gruvae_conv, [[float(parsed_line[2])]], axis=1)
-                gruvae_model_sizes = np.append(gruvae_model_sizes, [[max(0.0, float(parsed_line[4]))]], axis=1)
-
-            if parsed_line[1] == "f":
-                conv = np.append(conv, [[float(parsed_line[2])]], axis=1)
-                sample_sizes = np.append(sample_sizes, [[float(parsed_line[3])]], axis=1)
-                model_sizes = np.append(model_sizes, [[max(0.0, float(parsed_line[4]))]], axis=1)
-
-            if parsed_line[1] == "f" or parsed_line[1] == "i":
-                inference_values = np.asarray([float(value) for value in parsed_line[5:-1]]).reshape((5, 2))
-                for i_row in range(inference_values.shape[0]):
-                    for i_col in range(inference_values.shape[1]):
-                        metrics[stage2idx[parsed_line[1]], i_col, i_row, int(parsed_line[0])] = \
-                            inference_values[i_row, i_col]
-
-            if parsed_line[1] == "f" or parsed_line[1] == "i" or parsed_line[1] == "s":
-                sess = int(parsed_line[0])
-                epoch = int(parsed_line[2])
-                value = float(parsed_line[6 + sess * 2])
-                LC = np.append(LC, [[epoch, value]], axis=0)
-                if parsed_line[1] == "f":
-                    if "DGR" in filepath:  # accounts for epochs and memory taken by generative model
-                        LC[:, 0] += gruvae_conv[0, len(LCs)]
-                        init_value = copy(LC[0, 1])
-                        LC = np.insert(LC, 0, [[0, init_value]], axis=0)
-                    LCs.append(copy(LC))
-                    LC = np.ndarray(shape=(0, 2))
-
-    if "DGR" in filepath: # accounts for epochs and memory taken by generative model
-        conv = conv + gruvae_conv
-        model_sizes[0, 1:] = model_sizes[0, 1:] + gruvae_model_sizes[0, 1:]
-
-    return metrics, conv, LCs, model_sizes, sample_sizes
-
-
 def format_method_names(methods):
     method_names = []
     method2name = {
-        "offline": "Batch",
-        "finetune": "Finetune",
-        "SI": "SI",
-        "L2": "L2",
-        "PNN": "PNN",
-        "CWR": "CWR",
-        "DGR": "DGR"
+        "logit": "Logistic Classification",
     }
     for method in methods:
         method_names.append(method2name[method])
@@ -563,13 +506,7 @@ def format_method_names(methods):
 def format_method_colors(methods):
     method_colors = []
     method2color = {
-        "offline": "m",
-        "finetune": "m",
-        "SI": "b",
-        "L2": "b",
-        "PNN": "g",
-        "CWR": "g",
-        "DGR": "y",
+        "logit": "m",
     }
     for method in methods:
         method_colors.append(method2color[method])
@@ -579,13 +516,7 @@ def format_method_colors(methods):
 def format_method_linestyles(methods):
     method_markers = []
     method2marker = {
-        "offline": ":",
-        "finetune": "--",
-        "SI": ":",
-        "L2": "--",
-        "PNN": ":",
-        "CWR": "--",
-        "DGR": ":",
+        "logit": ":",
     }
     for method in methods:
         method_markers.append(method2marker[method])
@@ -595,334 +526,15 @@ def format_method_linestyles(methods):
 def format_method_hatches(methods):
     method_markers = []
     method2marker = {
-        "offline": "//",
-        "finetune": None,
-        "SI": None,
-        "L2": "//",
-        "PNN": "//",
-        "CWR": None,
-        "DGR": "//",
+        "logit": "//",
     }
     for method in methods:
         method_markers.append(method2marker[method])
     return method_markers
 
-
-def extract_runs_avg_std(datasets, models, methods, num_of_exp=5, num_sess=5):
-    summary_num_metrics = 11
-    num_metrics = 7
-    # avgs
-    avg_conv__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    avg_mrr_i__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    avg_mrr_f__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    avg_hit_i__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    avg_hit_f__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    avg_stats__ = np.ndarray(shape=(0, summary_num_metrics, len(methods)))
-    avg_mrr_stats__ = np.ndarray(shape=(0, len(methods), num_metrics))
-    avg_hit_stats__ = np.ndarray(shape=(0, len(methods), num_metrics))
-    # errs
-    std_conv__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    std_mrr_i__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    std_mrr_f__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    std_hit_i__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    std_hit_f__ = np.ndarray(shape=(0, num_sess, len(methods)))
-    std_stats__ = np.ndarray(shape=(0, summary_num_metrics, len(methods)))
-    std_mrr_stats__ = np.ndarray(shape=(0, len(methods), num_metrics))
-    std_hit_stats__ = np.ndarray(shape=(0, len(methods), num_metrics))
-
-    for dataset in datasets:
-        for model in models:
-            if dataset == "WN18RR":
-                num_triples = 86835
-            elif dataset == "FB15K237":
-                num_triples = 272115
-            elif dataset == "THOR_U":
-                num_triples = 1580
-            else:
-                logout("Dataset not recognized for result generation", "f")
-                exit()
-
-            # accumulates the metrics
-            conv_ = np.ndarray(shape=(0, num_sess, len(methods)))
-            mrr_i_ = np.ndarray(shape=(0, num_sess, len(methods)))
-            mrr_f_ = np.ndarray(shape=(0, num_sess, len(methods)))
-            hit_i_ = np.ndarray(shape=(0, num_sess, len(methods)))
-            hit_f_ = np.ndarray(shape=(0, num_sess, len(methods)))
-            stats_ = np.ndarray(shape=(0, summary_num_metrics, len(methods)))
-            mrr_stats_ = np.ndarray(shape=(0, len(methods), num_metrics))
-            hit_stats_ = np.ndarray(shape=(0, len(methods), num_metrics))
-
-            for exp_num in range(1, num_of_exp+1):
-                conv = np.ndarray(shape=(0, num_sess))
-                avg_mrr_f = np.ndarray(shape=(0, num_sess))
-                avg_mrr_i = np.ndarray(shape=(0, num_sess))
-                avg_hit_f = np.ndarray(shape=(0, num_sess))
-                avg_hit_i = np.ndarray(shape=(0, num_sess))
-                mrr_acc = []
-                hits_acc = []
-                mrr_fwt = []
-                hits_fwt = []
-                mrr_rem = []
-                hits_rem = []
-                mrr_pbwt = []
-                hits_pbwt = []
-                ms = []
-                sss = []
-                lca = []
-
-                # must be accounted for bc SI allocates variables before initial learning session so not in memory sizes
-                l2_initial_size = 0.0
-
-                # gather logged data for the plot
-                filepath_root = os.path.abspath(os.path.dirname(__file__)) + "/logs/continual_setting__" + dataset + "_mt" + model + "_"
-                for method in methods:
-                    method_str = "clm" + method
-                    filepath = filepath_root + method_str + "/test_" + str(exp_num) + ".csv"
-                    inf_f = csvlogs2plots_format_inference(filepath)
-                    filepath = filepath_root + method_str + "/performances_" + str(exp_num) + ".csv"
-                    inf, run_conv, lcs, model_sizes, sample_sizes = csvlogs2plots_format_noninference(filepath)
-                    inf[1, 1, :, :] = inf_f[1, 1, :, :]
-                    inf[1, 0, :, :] = inf_f[1, 0, :, :]
-                    avg_mrr_i = np.append(avg_mrr_i, [np.average(np.triu(inf[0, 1, :, :]), axis=0)], axis=0)
-                    avg_mrr_f = np.append(avg_mrr_f, [np.average(np.triu(inf[1, 1, :, :]), axis=0)], axis=0)
-                    avg_hit_i = np.append(avg_hit_i, [np.average(np.triu(inf[0, 0, :, :]), axis=0)], axis=0)
-                    avg_hit_f = np.append(avg_hit_f, [np.average(np.triu(inf[1, 0, :, :]), axis=0)], axis=0)
-                    conv = np.append(conv, run_conv, axis=0)
-                    # ACC & FWT
-                    mrr_f_T = inf[1, 1, :, :].T
-                    hit_f_T = inf[1, 0, :, :].T
-                    mrr_acc.append("{:.4f}".format(np.sum(np.tril(mrr_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-                    hits_acc.append("{:.4f}".format(np.sum(np.tril(hit_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-                    mrr_fwt.append("{:.4f}".format(np.sum(np.triu(mrr_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-                    hits_fwt.append("{:.4f}".format(np.sum(np.triu(hit_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-                    # BWT+ & REM
-                    mrr_bwt = 0.0
-                    hit_bwt = 0.0
-                    for i in range(1, mrr_f_T.shape[0]):
-                        for j in range(i):
-                            mrr_bwt = mrr_f_T[i, j] - mrr_f_T[j, j]
-                    for i in range(1, hit_f_T.shape[0]):
-                        for j in range(i):
-                            hit_bwt = hit_f_T[i, j] - hit_f_T[j, j]
-                    mrr_bwt = mrr_bwt / ((num_sess * (num_sess - 1)) / 2.0)
-                    hit_bwt = hit_bwt / ((num_sess * (num_sess - 1)) / 2.0)
-                    mrr_rem.append("{:.4f}".format(1.0 - np.absolute(np.min([0, mrr_bwt]))))
-                    mrr_pbwt.append("{:.4f}".format(np.max([0, mrr_bwt])))
-                    hits_rem.append("{:.4f}".format(1.0 - np.absolute(np.min([0, hit_bwt]))))
-                    hits_pbwt.append("{:.4f}".format(np.max([0, hit_bwt])))
-                    # MS & SSS
-                    if "L2" in filepath:
-                        l2_initial_size = copy(float(model_sizes[0, 0]))
-                    if "SI" in filepath:
-                        if l2_initial_size == 0.0:
-                            logout("L2 inital size is wrong.", "w")
-                        model_sizes[0, 0] = l2_initial_size
-                    ms.append("{:.4f}".format(np.min([1.0, np.average(model_sizes[0, 0] / model_sizes)])))
-                    sss.append("{:.4f}".format(1.0 - np.min([1.0, np.average(sample_sizes / num_triples)])))
-                    # LCA
-                    LCA_fracs = []
-                    for lc in lcs:
-                        best_value = lc[-1, 1]
-                        best_value_idx = int(np.argwhere(lc[:, 1] == best_value)[0])
-                        to_best_value_curve = lc[:best_value_idx+1, :]
-                        x = to_best_value_curve[:, 0]
-                        y = to_best_value_curve[:, 1]
-                        normalize_y = np.ones_like(y) * best_value
-                        frac = integrate.trapz(x=x, y=y) / integrate.trapz(x=x, y=normalize_y)
-                        if isnan(frac):
-                            frac = 1.0
-                        LCA_fracs.append(frac)
-                    lca.append("{:.4f}".format(np.average(LCA_fracs)))
-
-                # perform final data transformations
-                conv = np.transpose(conv)
-                avg_mrr_i = np.transpose(avg_mrr_i) * 100.0
-                avg_mrr_f = np.transpose(avg_mrr_f) * 100.0
-                avg_hit_i = np.transpose(avg_hit_i) * 100.0
-                avg_hit_f = np.transpose(avg_hit_f) * 100.0
-                stats = copy(np.stack((mrr_acc, hits_acc, mrr_fwt, hits_fwt, mrr_pbwt, hits_pbwt, mrr_rem, hits_rem, ms, sss, lca)))
-                mrr_stats = copy(np.stack((mrr_acc, mrr_fwt, mrr_pbwt, mrr_rem, ms, sss, lca))).astype(float).T
-                hit_stats = copy(np.stack((hits_acc, hits_fwt, hits_pbwt, hits_rem, ms, sss, lca))).astype(float).T
-
-                # append to the averaging arrays
-                conv_ = np.append(conv_, [conv], axis=0)
-                mrr_i_ = np.append(mrr_i_, [avg_mrr_i], axis=0)
-                mrr_f_ = np.append(mrr_f_, [avg_mrr_f], axis=0)
-                hit_i_ = np.append(hit_i_, [avg_hit_i], axis=0)
-                hit_f_ = np.append(hit_f_, [avg_hit_f], axis=0)
-                stats_ = np.append(stats_, [stats.astype(float)], axis=0)
-                mrr_stats_ = np.append(mrr_stats_, [mrr_stats], axis=0)
-                hit_stats_ = np.append(hit_stats_, [hit_stats], axis=0)
-
-            avg_conv__ = np.append(avg_conv__, [np.average(conv_, axis=0)], axis=0)
-            avg_mrr_i__ = np.append(avg_mrr_i__, [np.average(mrr_i_, axis=0)], axis=0)
-            avg_mrr_f__ = np.append(avg_mrr_f__, [np.average(mrr_f_, axis=0)], axis=0)
-            avg_hit_i__ = np.append(avg_hit_i__, [np.average(hit_i_, axis=0)], axis=0)
-            avg_hit_f__ = np.append(avg_hit_f__, [np.average(hit_f_, axis=0)], axis=0)
-            avg_stats__ = np.append(avg_stats__, [np.average(stats_, axis=0)], axis=0)
-            avg_mrr_stats__ = np.append(avg_mrr_stats__, [np.average(mrr_stats_, axis=0)], axis=0)
-            avg_hit_stats__ = np.append(avg_hit_stats__, [np.average(hit_stats_, axis=0)], axis=0)
-            std_conv__ = np.append(std_conv__, [np.std(conv_, axis=0)], axis=0)
-            std_mrr_i__ = np.append(std_mrr_i__, [np.std(mrr_i_, axis=0)], axis=0)
-            std_mrr_f__ = np.append(std_mrr_f__, [np.std(mrr_f_, axis=0)], axis=0)
-            std_hit_i__ = np.append(std_hit_i__, [np.std(hit_i_, axis=0)], axis=0)
-            std_hit_f__ = np.append(std_hit_f__, [np.std(hit_f_, axis=0)], axis=0)
-            std_stats__ = np.append(std_stats__, [np.std(stats_, axis=0)], axis=0)
-            std_mrr_stats__ = np.append(std_mrr_stats__, [np.std(mrr_stats_, axis=0)], axis=0)
-            std_hit_stats__ = np.append(std_hit_stats__, [np.std(hit_stats_, axis=0)], axis=0)
-
-    return (avg_conv__, std_conv__,
-            avg_mrr_i__, avg_mrr_f__, std_mrr_i__, std_mrr_f__,
-            avg_hit_i__, avg_hit_f__, std_hit_i__, std_hit_f__,
-            avg_stats__, std_stats__,
-            avg_mrr_stats__, std_mrr_stats__,
-            avg_hit_stats__, std_hit_stats__)
-
-
-def get_experiment_stats(dataset, model, methods, log_file, num_of_exp=5, num_sess=5):
-    summary_num_metrics = 11
-    num_metrics = 7
-
-    if dataset == "WN18RR":
-        num_triples = 86835
-    elif dataset == "FB15K237":
-        num_triples = 272115
-    elif dataset == "THOR_U":
-        num_triples = 1580
-    else:
-        logout("Dataset not recognized for result generation", "f")
-        exit()
-
-    # accumulates the metrics
-    conv_ = np.ndarray(shape=(0, num_sess, len(methods)))
-    mrr_i_ = np.ndarray(shape=(0, num_sess, len(methods)))
-    mrr_f_ = np.ndarray(shape=(0, num_sess, len(methods)))
-    hit_i_ = np.ndarray(shape=(0, num_sess, len(methods)))
-    hit_f_ = np.ndarray(shape=(0, num_sess, len(methods)))
-    stats_ = np.ndarray(shape=(0, summary_num_metrics, len(methods)))
-    mrr_stats_ = np.ndarray(shape=(0, len(methods), num_metrics))
-    hit_stats_ = np.ndarray(shape=(0, len(methods), num_metrics))
-
-    for exp_num in range(1, num_of_exp+1):
-        conv = np.ndarray(shape=(0, num_sess))
-        avg_mrr_f = np.ndarray(shape=(0, num_sess))
-        avg_mrr_i = np.ndarray(shape=(0, num_sess))
-        avg_hit_f = np.ndarray(shape=(0, num_sess))
-        avg_hit_i = np.ndarray(shape=(0, num_sess))
-        mrr_acc = []
-        hits_acc = []
-        mrr_fwt = []
-        hits_fwt = []
-        mrr_rem = []
-        hits_rem = []
-        mrr_pbwt = []
-        hits_pbwt = []
-        ms = []
-        sss = []
-        lca = []
-
-        # must be accounted for bc SI allocates variables before initial learning session so not in memory sizes
-        l2_initial_size = 0.0
-
-        # gather logged data for the plot
-        filepath_root = os.path.abspath(os.path.dirname(__file__)) + "/logs/continual_setting__" + dataset + "_mt" + model + "_"
-        for method in methods:
-            method_str = "clm" + method
-            filepath = filepath_root + method_str + "/test_" + str(exp_num) + ".csv"
-            inf_f = csvlogs2plots_format_inference(filepath)
-            filepath = filepath_root + method_str + "/performances_" + str(exp_num) + ".csv"
-            inf, run_conv, lcs, model_sizes, sample_sizes = csvlogs2plots_format_noninference(filepath)
-            inf[1, 1, :, :] = inf_f[1, 1, :, :]
-            inf[1, 0, :, :] = inf_f[1, 0, :, :]
-            avg_mrr_i = np.append(avg_mrr_i, [np.average(np.triu(inf[0, 1, :, :]), axis=0)], axis=0)
-            avg_mrr_f = np.append(avg_mrr_f, [np.average(np.triu(inf[1, 1, :, :]), axis=0)], axis=0)
-            avg_hit_i = np.append(avg_hit_i, [np.average(np.triu(inf[0, 0, :, :]), axis=0)], axis=0)
-            avg_hit_f = np.append(avg_hit_f, [np.average(np.triu(inf[1, 0, :, :]), axis=0)], axis=0)
-            conv = np.append(conv, run_conv, axis=0)
-            # ACC & FWT
-            mrr_f_T = inf[1, 1, :, :].T
-            hit_f_T = inf[1, 0, :, :].T
-            mrr_acc.append("{:.4f}".format(np.sum(np.tril(mrr_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-            hits_acc.append("{:.4f}".format(np.sum(np.tril(hit_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-            mrr_fwt.append("{:.4f}".format(np.sum(np.triu(mrr_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-            hits_fwt.append("{:.4f}".format(np.sum(np.triu(hit_f_T)) / ((num_sess * (num_sess + 1)) / 2.0)))
-            # BWT+ & REM
-            mrr_bwt = 0.0
-            hit_bwt = 0.0
-            for i in range(1, mrr_f_T.shape[0]):
-                for j in range(i):
-                    mrr_bwt = mrr_f_T[i, j] - mrr_f_T[j, j]
-            for i in range(1, hit_f_T.shape[0]):
-                for j in range(i):
-                    hit_bwt = hit_f_T[i, j] - hit_f_T[j, j]
-            mrr_bwt = mrr_bwt / ((num_sess * (num_sess - 1)) / 2.0)
-            hit_bwt = hit_bwt / ((num_sess * (num_sess - 1)) / 2.0)
-            mrr_rem.append("{:.4f}".format(1.0 - np.absolute(np.min([0, mrr_bwt]))))
-            mrr_pbwt.append("{:.4f}".format(np.max([0, mrr_bwt])))
-            hits_rem.append("{:.4f}".format(1.0 - np.absolute(np.min([0, hit_bwt]))))
-            hits_pbwt.append("{:.4f}".format(np.max([0, hit_bwt])))
-            # MS & SSS
-            if "L2" in filepath:
-                l2_initial_size = copy(float(model_sizes[0, 0]))
-            if "SI" in filepath:
-                if l2_initial_size == 0.0:
-                    logout("L2 inital size is wrong.", "w")
-                model_sizes[0, 0] = l2_initial_size
-            ms.append("{:.4f}".format(np.min([1.0, np.average(model_sizes[0, 0] / model_sizes)])))
-            sss.append("{:.4f}".format(1.0 - np.min([1.0, np.average(sample_sizes / num_triples)])))
-            # LCA
-            LCA_fracs = []
-            for lc in lcs:
-                best_value = lc[-1, 1]
-                best_value_idx = int(np.argwhere(lc[:, 1] == best_value)[0])
-                to_best_value_curve = lc[:best_value_idx+1, :]
-                x = to_best_value_curve[:, 0]
-                y = to_best_value_curve[:, 1]
-                normalize_y = np.ones_like(y) * best_value
-                frac = integrate.trapz(x=x, y=y) / integrate.trapz(x=x, y=normalize_y)
-                if isnan(frac):
-                    frac = 1.0
-                LCA_fracs.append(frac)
-            lca.append("{:.4f}".format(np.average(LCA_fracs)))
-
-        # perform final data transformations
-        conv = np.transpose(conv)
-        avg_mrr_i = np.transpose(avg_mrr_i) * 100.0
-        avg_mrr_f = np.transpose(avg_mrr_f) * 100.0
-        avg_hit_i = np.transpose(avg_hit_i) * 100.0
-        avg_hit_f = np.transpose(avg_hit_f) * 100.0
-        stats = copy(np.stack((mrr_acc, hits_acc, mrr_fwt, hits_fwt, mrr_pbwt, hits_pbwt, mrr_rem, hits_rem, ms, sss, lca)))
-        mrr_stats = copy(np.stack((mrr_acc, mrr_fwt, mrr_pbwt, mrr_rem, ms, sss, lca))).astype(float).T
-        hit_stats = copy(np.stack((hits_acc, hits_fwt, hits_pbwt, hits_rem, ms, sss, lca))).astype(float).T
-
-        # append to the averaging arrays
-        conv_ = np.append(conv_, [conv], axis=0)
-        mrr_i_ = np.append(mrr_i_, [avg_mrr_i], axis=0)
-        mrr_f_ = np.append(mrr_f_, [avg_mrr_f], axis=0)
-        hit_i_ = np.append(hit_i_, [avg_hit_i], axis=0)
-        hit_f_ = np.append(hit_f_, [avg_hit_f], axis=0)
-        stats_ = np.append(stats_, [stats.astype(float)], axis=0)
-        mrr_stats_ = np.append(mrr_stats_, [mrr_stats], axis=0)
-        hit_stats_ = np.append(hit_stats_, [hit_stats], axis=0)
-
-    run_stats_test(mrr_stats_[:, :, 0], methods, num_of_exp, "MRR ACC Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(mrr_stats_[:, :, 1], methods, num_of_exp, "MRR FWT Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(mrr_stats_[:, :, 2], methods, num_of_exp, "MRR +BWT Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(mrr_stats_[:, :, 3], methods, num_of_exp, "MRR REM Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 0], methods, num_of_exp, "HIT ACC Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 1], methods, num_of_exp, "HIT FWT Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 2], methods, num_of_exp, "HIT +BWT Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 3], methods, num_of_exp, "HIT REM Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 4], methods, num_of_exp, "MS Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 5], methods, num_of_exp, "SSS Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test(hit_stats_[:, :, 6], methods, num_of_exp, "LCA Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test_all_sessions(conv_, methods, num_of_exp, num_sess, "Convergence Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test_all_sessions(mrr_i_, methods, num_of_exp, num_sess, "MRR Initial Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test_all_sessions(mrr_f_, methods, num_of_exp, num_sess, "MRR Final Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test_all_sessions(hit_i_, methods, num_of_exp, num_sess, "Hits@10 Initial Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-    run_stats_test_all_sessions(hit_f_, methods, num_of_exp, num_sess, "Hits@10 Final Stats for " + str(dataset) + " using " + str(model).upper(), log_file)
-
-
+###########################################################
+# Generic stats tests
+###########################################################
 def run_stats_test_all_sessions(data, methods, num_exp, num_sess, test_label, log_file):
     for i in range(num_sess):
         run_stats_test(data[:, i, :], methods, num_exp, test_label + " in session " + str(i), log_file)
@@ -942,348 +554,110 @@ def run_stats_test(data, methods, num_exp, test_label, log_file):
         f.write(test_label + "\n" + str(res) + "\n" + str(res2))
 
 
-def get_plots(dataset, model, methods, num_exp=5, num_sess=5):
-    avg_conv, std_conv, \
-    avg_mrr_i, avg_mrr_f, std_mrr_i, std_mrr_f, \
-    avg_hit_i, avg_hit_f, std_hit_i, std_hit_f, \
-    avg_stats, std_stats, \
-    avg_mrr_stats, std_mrr_stats, \
-    avg_hit_stats, std_hit_stats = extract_runs_avg_std([dataset], [model], methods, num_exp, num_sess)
-
-    avg_conv = np.average(avg_conv, axis=0)
-    std_conv = np.average(std_conv, axis=0)
-    avg_mrr_i = np.average(avg_mrr_i, axis=0)
-    avg_mrr_f = np.average(avg_mrr_f, axis=0)
-    std_mrr_i = np.average(std_mrr_i, axis=0)
-    std_mrr_f = np.average(std_mrr_f, axis=0)
-    avg_hit_i = np.average(avg_hit_i, axis=0)
-    avg_hit_f = np.average(avg_hit_f, axis=0)
-    std_hit_i = np.average(std_hit_i, axis=0)
-    std_hit_f = np.average(std_hit_f, axis=0)
-    avg_stats = np.average(avg_stats, axis=0)
-    std_stats = np.average(std_stats, axis=0)
-    avg_mrr_stats = np.average(avg_mrr_stats, axis=0)
-    avg_hit_stats = np.average(avg_hit_stats, axis=0)
-
-    # format method names/colors
-    names = format_method_names(methods)
-    colors = format_method_colors(methods)
-    linestyles = format_method_linestyles(methods)
-    hatches = format_method_hatches(methods)
-
-    # generate each plot
-    conv_f_plot = plot_mbar(avg_conv, names, colors, hatches,
-                            ylabel="Epochs",
-                            titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                            top_title="Convergence Speed for " + dataset + " across Sessions using " + str(model.upper()),
-                            ylim=[0.0, np.max(avg_conv)],
-                            yerr=std_conv)
-    avg_mrr_i_bplot = plot_mbar(avg_mrr_i, names, colors, hatches,
-                               ylabel="MRR %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Initial MRR for " + dataset + " across Sessions using " + str(model.upper()),
-                               ylim=[0.0, np.max(avg_mrr_f)],
-                               yerr=std_mrr_i)
-    avg_mrr_f_bplot = plot_mbar(avg_mrr_f, names, colors, hatches,
-                               ylabel="MRR %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Final MRR for " + dataset + " across Sessions using " + str(model.upper()),
-                               ylim=[0.0, np.max(avg_mrr_f)],
-                               yerr=std_mrr_f)
-    avg_mrr_bplot = plot_mbar_stacked(avg_mrr_i, avg_mrr_f, names, colors, hatches,
-                                      ylabel="MRR %",
-                                      titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                                      top_title="MRR for " + dataset + " across Sessions using " + str(model.upper()),
-                                      ylim=[0.0, np.max(avg_mrr_f)],
-                                      yerr1=std_mrr_i, yerr2=std_mrr_f)
-    avg_hit_i_bplot = plot_mbar(avg_hit_i, names, colors, hatches,
-                               ylabel="Hits@10 %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Initial Hits@10 for " + dataset + " across Sessions using " + str(model.upper()),
-                               ylim=[0.0, np.max(avg_hit_f)],
-                               yerr=std_hit_i)
-    avg_hit_f_bplot = plot_mbar(avg_hit_f, names, colors, hatches,
-                               ylabel="Hits@10 %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Final Hits@10 for " + dataset + " across Sessions using " + str(model.upper()),
-                               ylim=[0.0, np.max(avg_hit_f)],
-                               yerr=std_hit_f)
-    avg_hit_bplot = plot_mbar_stacked(avg_hit_i, avg_hit_f, names, colors, hatches,
-                                      ylabel="Hits@10 %",
-                                      titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                                      top_title="Hits@10 for " + dataset + " across Sessions using " + str(model.upper()),
-                                      ylim=[0.0, np.max(avg_hit_f)],
-                                      yerr1=std_hit_i, yerr2=std_hit_f)
-    avg_mrr_i_lplot = plot_line(np.arange(num_sess), avg_mrr_i.T, names, colors, linestyles,
-                                ylabel="MRR %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Initial MRR for " + dataset + " across Sessions using " + str(model.upper()),
-                                ylim=[0.0, np.max(avg_mrr_f)],
-                                yerr=std_mrr_i.T)
-    avg_mrr_f_lplot = plot_line(np.arange(num_sess), avg_mrr_f.T, names, colors, linestyles,
-                                ylabel="MRR %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Final MRR for " + dataset + " across Sessions using " + str(model.upper()),
-                                ylim=[0.0, np.max(avg_mrr_f)],
-                                yerr=std_mrr_f.T)
-    avg_hit_i_lplot = plot_line(np.arange(num_sess), avg_hit_i.T, names, colors, linestyles,
-                                ylabel="Hits@10 %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Initial Hits@10 for " + dataset + " across Sessions using " + str(model.upper()),
-                                ylim=[0.0, np.max(avg_hit_f)],
-                                yerr=std_hit_i.T)
-    avg_hit_f_lplot = plot_line(np.arange(num_sess), avg_hit_f.T, names, colors, linestyles,
-                                ylabel="Hits@10 %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Final Hits@10 for " + dataset + " across Sessions using " + str(model.upper()),
-                                ylim=[0.0, np.max(avg_hit_f)],
-                                yerr=std_hit_f.T)
-    avg_summary_table = plot_table(avg_stats,
-                               row_labels=["AVG MRR ACC", "AVG Hits@10 ACC", "AVG MRR FWT", "AVG Hits@10 FWT",
-                                           "AVG MRR +BWT", "AVG Hits@10 +BWT", "AVG MRR REM", "AVG Hits@10 REM",
-                                           "AVG MS", "AVG SSS", "AVG LCA"],
-                               col_labels=names,
-                               title="AVG Summary Table for " + dataset + " using " + str(model.upper()))
-    std_summary_table = plot_table(std_stats,
-                               row_labels=["STD MRR ACC", "STD Hits@10 ACC", "STD MRR FWT", "STD Hits@10 FWT",
-                                           "STD MRR +BWT", "STD Hits@10 +BWT", "STD MRR REM", "STD Hits@10 REM",
-                                           "STD MS", "STD SSS", "STD LCA"],
-                               col_labels=names,
-                               title="STD Summary Table for " + dataset + " using " + str(model.upper()))
-
-    mrr_radar = plot_radar(avg_mrr_stats, colors, linestyles,
-                           metric_labels=["ACC", "FWT", "+BWT", "REM", "MS", "SSS", "LCA"],
-                           method_labels=names,
-                           title="MRR CL Metrics Radar for " + dataset + " using " + str(model.upper()))
-    hit_radar = plot_radar(avg_hit_stats, colors, linestyles,
-                           metric_labels=["ACC", "FWT", "+BWT", "REM", "MS", "SSS", "LCA"],
-                           method_labels=names,
-                           title="Hits@10 CL Metrics Radar for " + dataset + " using " + str(model.upper()))
-    mrr_acclca_scatter = plot_scatter(avg_mrr_stats[:, -1], avg_mrr_stats[:, 0], names, colors, linestyles,
-                                      xlabel="LCA", ylabel="ACC MRR",
-                                      top_title="Comparison for " + dataset + " using " + str(model.upper()))
-                                      # xerr=std_mrr_stats[:, -1], yerr=std_mrr_stats[:, 0])
-    hit_acclca_scatter = plot_scatter(avg_hit_stats[:, -1], avg_hit_stats[:, 0], names, colors, linestyles,
-                                      xlabel="LCA", ylabel="ACC Hits@10",
-                                      top_title="Comparison for " + dataset + " using " + str(model.upper()))
-                                      # xerr=std_hit_stats[:, -1], yerr=std_hit_stats[:, 0])
-    mrr_accms_scatter = plot_scatter(avg_mrr_stats[:, 4], avg_mrr_stats[:, 0], names, colors, linestyles,
-                                      xlabel="MS", ylabel="ACC MRR",
-                                      top_title="Comparison for " + dataset + " using " + str(model.upper()))
-                                      # xerr=std_mrr_stats[:, 4], yerr=std_mrr_stats[:, 0])
-    hit_accms_scatter = plot_scatter(avg_hit_stats[:, 4], avg_hit_stats[:, 0], names, colors, linestyles,
-                                      xlabel="MS", ylabel="ACC Hits@10",
-                                      top_title="Comparison for " + dataset + " using " + str(model.upper()))
-                                      # xerr=std_hit_stats[:, 4], yerr=std_hit_stats[:, 0])
-
-    # output to PDF
-    return [avg_summary_table, std_summary_table,
-            mrr_radar, hit_radar,
-            conv_f_plot,
-            avg_mrr_i_bplot, avg_mrr_f_bplot, avg_mrr_bplot,
-            avg_hit_i_bplot, avg_hit_f_bplot, avg_hit_bplot,
-            avg_mrr_i_lplot, avg_mrr_f_lplot, avg_hit_i_lplot, avg_hit_f_lplot,
-            mrr_acclca_scatter, hit_acclca_scatter, mrr_accms_scatter, hit_accms_scatter]
+def load_data(data_fp):
+    with open(data_fp, "rb") as f:
+        results = pickle.load(f)
+    return results
 
 
-def get_avg_plots(datasets, models, methods, avg_name="", num_exp=5, num_sess=5):
-    avg_conv, std_conv, \
-    avg_mrr_i, avg_mrr_f, std_mrr_i, std_mrr_f, \
-    avg_hit_i, avg_hit_f, std_hit_i, std_hit_f, \
-    avg_stats, std_stats, \
-    avg_mrr_stats, std_mrr_stats, \
-    avg_hit_stats, std_hit_stats = extract_runs_avg_std(datasets, models, methods, num_exp, num_sess)
+def weighted_avg_and_std(values, weights):
+    """
+    Return the weighted average and standard deviation.
 
-    avg_conv = np.average(avg_conv, axis=0)
-    std_conv = np.average(std_conv, axis=0)
-    avg_mrr_i = np.average(avg_mrr_i, axis=0)
-    avg_mrr_f = np.average(avg_mrr_f, axis=0)
-    std_mrr_i = np.average(std_mrr_i, axis=0)
-    std_mrr_f = np.average(std_mrr_f, axis=0)
-    avg_hit_i = np.average(avg_hit_i, axis=0)
-    avg_hit_f = np.average(avg_hit_f, axis=0)
-    std_hit_i = np.average(std_hit_i, axis=0)
-    std_hit_f = np.average(std_hit_f, axis=0)
-    avg_stats = np.average(avg_stats, axis=0)
-    std_stats = np.average(std_stats, axis=0)
-    avg_mrr_stats = np.average(avg_mrr_stats, axis=0)
-    avg_hit_stats = np.average(avg_hit_stats, axis=0)
-
-    # format method names/colors
-    names = format_method_names(methods)
-    colors = format_method_colors(methods)
-    linestyles = format_method_linestyles(methods)
-    hatches = format_method_hatches(methods)
-
-    # generate each plot
-    conv_f_plot = plot_mbar(avg_conv, names, colors, hatches,
-                            ylabel="Epochs",
-                            titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                            top_title="Convergence Speed" + avg_name,
-                            ylim=[0.0, np.max(avg_conv)],
-                            yerr=std_conv)
-    avg_mrr_i_bplot = plot_mbar(avg_mrr_i, names, colors, hatches,
-                               ylabel="MRR %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Initial MRR" + avg_name,
-                               ylim=[0.0, np.max(avg_mrr_f)],
-                               yerr=std_mrr_i)
-    avg_mrr_f_bplot = plot_mbar(avg_mrr_f, names, colors, hatches,
-                               ylabel="MRR %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Final MRR" + avg_name,
-                               ylim=[0.0, np.max(avg_mrr_f)],
-                               yerr=std_mrr_f)
-    avg_mrr_bplot = plot_mbar_stacked(avg_mrr_i, avg_mrr_f, names, colors, hatches,
-                                      ylabel="MRR %",
-                                      titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                                      top_title="MRR" + avg_name,
-                                      ylim=[0.0, np.max(avg_mrr_f)],
-                                      yerr1=std_mrr_i, yerr2=std_mrr_f)
-    avg_hit_i_bplot = plot_mbar(avg_hit_i, names, colors, hatches,
-                               ylabel="Hits@10 %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Initial Hits@10" + avg_name,
-                               ylim=[0.0, np.max(avg_hit_f)],
-                               yerr=std_hit_i)
-    avg_hit_f_bplot = plot_mbar(avg_hit_f, names, colors, hatches,
-                               ylabel="Hits@10 %",
-                               titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                               top_title="Final Hits@10" + avg_name,
-                               ylim=[0.0, np.max(avg_hit_f)],
-                               yerr=std_hit_f)
-    avg_hit_bplot = plot_mbar_stacked(avg_hit_i, avg_hit_f, names, colors, hatches,
-                                      ylabel="Hits@10 %",
-                                      titles=["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"],
-                                      top_title="Hits@10" + avg_name,
-                                      ylim=[0.0, np.max(avg_hit_f)],
-                                      yerr1=std_hit_i, yerr2=std_hit_f)
-    avg_mrr_i_lplot = plot_line(np.arange(num_sess), avg_mrr_i.T, names, colors, linestyles,
-                                ylabel="MRR %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Initial MRR" + avg_name,
-                                ylim=[0.0, np.max(avg_mrr_f)],
-                                yerr=std_mrr_i.T)
-    avg_mrr_f_lplot = plot_line(np.arange(num_sess), avg_mrr_f.T, names, colors, linestyles,
-                                ylabel="MRR %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Final MRR" + avg_name,
-                                ylim=[0.0, np.max(avg_mrr_f)],
-                                yerr=std_mrr_f.T)
-    avg_hit_i_lplot = plot_line(np.arange(num_sess), avg_hit_i.T, names, colors, linestyles,
-                                ylabel="Hits@10 %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Initial Hits@10" + avg_name,
-                                ylim=[0.0, np.max(avg_hit_f)],
-                                yerr=std_hit_i.T)
-    avg_hit_f_lplot = plot_line(np.arange(num_sess), avg_hit_f.T, names, colors, linestyles,
-                                ylabel="Hits@10 %",
-                                xticks=[[0, 1, 2, 3, 4], ["LS-1", "LS-2", "LS-3", "LS-4", "LS-5"]],
-                                top_title="Final Hits@10" + avg_name,
-                                ylim=[0.0, np.max(avg_hit_f)],
-                                yerr=std_hit_f.T)
-    avg_summary_table = plot_table(avg_stats,
-                                   row_labels=["AVG MRR ACC", "AVG Hits@10 ACC", "AVG MRR FWT", "AVG Hits@10 FWT",
-                                               "AVG MRR +BWT", "AVG Hits@10 +BWT", "AVG MRR REM", "AVG Hits@10 REM",
-                                               "AVG MS", "AVG SSS", "AVG LCA"],
-                                   col_labels=names,
-                                   title="AVG Summary Table" + avg_name)
-    std_summary_table = plot_table(std_stats,
-                                   row_labels=["STD MRR ACC", "STD Hits@10 ACC", "STD MRR FWT", "STD Hits@10 FWT",
-                                               "STD MRR +BWT", "STD Hits@10 +BWT", "STD MRR REM", "STD Hits@10 REM",
-                                               "STD MS", "STD SSS", "STD LCA"],
-                                   col_labels=names,
-                                   title="STD Summary Table" + avg_name)
-    mrr_radar = plot_radar(avg_mrr_stats, colors, linestyles,
-                           metric_labels=["ACC", "FWT", "+BWT", "REM", "MS", "SSS", "LCA"],
-                           method_labels=names,
-                           title="MRR" + avg_name)
-    hit_radar = plot_radar(avg_hit_stats, colors, linestyles,
-                           metric_labels=["ACC", "FWT", "+BWT", "REM", "MS", "SSS", "LCA"],
-                           method_labels=names,
-                           title="Hits@10" + avg_name)
-    mrr_acclca_scatter = plot_scatter(avg_mrr_stats[:, -1], avg_mrr_stats[:, 0], names, colors, linestyles,
-                                      xlabel="LCA", ylabel="ACC MRR",
-                                      top_title="ACC to Learning Speed Comparsion" + avg_name)
-                                      # xerr=std_mrr_stats[:, -1], yerr=std_mrr_stats[:, 0])
-    hit_acclca_scatter = plot_scatter(avg_hit_stats[:, -1], avg_hit_stats[:, 0], names, colors, linestyles,
-                                      xlabel="LCA", ylabel="ACC Hits@10",
-                                      top_title="ACC to Learning Speed Comparsion" + avg_name)
-                                      # xerr=std_hit_stats[:, -1], yerr=std_hit_stats[:, 0])
-    mrr_accms_scatter = plot_scatter(avg_mrr_stats[:, 4], avg_mrr_stats[:, 0], names, colors, linestyles,
-                                     xlabel="MS", ylabel="ACC MRR",
-                                     top_title="ACC to Model Size Comparsion" + avg_name)
-                                     # xerr=std_mrr_stats[:, 4], yerr=std_mrr_stats[:, 0])
-    hit_accms_scatter = plot_scatter(avg_hit_stats[:, 4], avg_hit_stats[:, 0], names, colors, linestyles,
-                                     xlabel="MS", ylabel="ACC Hits@10",
-                                     top_title="ACC to Model Size Comparsion" + avg_name)
-                                     # xerr=std_hit_stats[:, 4], yerr=std_hit_stats[:, 0])
-
-    # output to PDF
-    return [avg_summary_table, std_summary_table,
-            mrr_radar, hit_radar,
-            conv_f_plot,
-            avg_mrr_i_bplot, avg_mrr_f_bplot, avg_mrr_bplot,
-            avg_hit_i_bplot, avg_hit_f_bplot, avg_hit_bplot,
-            avg_mrr_i_lplot, avg_mrr_f_lplot, avg_hit_i_lplot, avg_hit_f_lplot,
-            mrr_acclca_scatter, hit_acclca_scatter, mrr_accms_scatter, hit_accms_scatter]
+    values, weights -- Numpy ndarrays with the same shape.
+    """
+    average = np.average(values, weights=weights)
+    # Fast and numerically precise:
+    variance = np.average((values-average)**2, weights=weights)
+    return (average, sqrt(variance))
 
 
-def plot_ex_results(results, r2i):
-    f1s = []
-    fids = []
-    covs = []
-    for rel in r2i.keys():
-        if "reverse" in rel:
-            continue
+def get_summary(results):
+    summary = pd.DataFrame(columns=["Relation", "Coverage", "Fidelity", "F1-Fidelity", "Weight"], dtype=float)
+    rels = np.unique(results["rel"].to_numpy())
+    for rel in rels:
         rel_results = results.loc[results["rel"].isin([rel]),:]
+        weight = rel_results.shape[0]
         coverage = float(rel_results.shape[0] - rel_results["predict"].isin([0]).sum()) / float(rel_results.shape[0])
         rel_pred_results = rel_results.loc[rel_results["predict"].isin([1,-1]),:]
         fidelity = accuracy_score(rel_pred_results["label"].to_numpy(np.int), rel_pred_results["predict"].to_numpy(np.int))
         f1_fidelity = f1_score(rel_pred_results["label"].to_numpy(np.int), rel_pred_results["predict"].to_numpy(np.int))
-        logout("For relation " + rel + " coverage is " + str(coverage), "s")
-        logout("For relation " + rel + " fidelity is " + str(fidelity), "s")
-        logout("For relation " + rel + " f1-fidelity is " + str(f1_fidelity), "s")
-        f1s.append(f1_fidelity)
-        fids.append(fidelity)
-        covs.append(coverage)
-    logout("Coverage Mean: " + str(np.mean(covs)), "s")
-    logout("Coverage Std: " + str(np.std(covs)), "s")
-    logout("Fidelity Mean: " + str(np.mean(fids)), "s")
-    logout("Fidelity Std: " + str(np.std(fids)), "s")
-    logout("F1-Fidelity Mean: " + str(np.mean(f1s)), "s")
-    logout("F1-Fidelity Std: " + str(np.std(f1s)), "s")
+        summary = summary.append({"Relation": rel, "Coverage": coverage, "Fidelity": fidelity, "F1-Fidelity": f1_fidelity, "Weight": weight}, ignore_index=True)
+    cov_avg, cov_std = weighted_avg_and_std(summary["Coverage"].values, summary["Weight"].values)
+    fid_avg, fid_std = weighted_avg_and_std(summary["Fidelity"].values, summary["Weight"].values)
+    f1_avg, f1_std = weighted_avg_and_std(summary["F1-Fidelity"].values, summary["Weight"].values)
+    summary = summary.append({"Relation": "Mean", "Coverage": cov_avg, "Fidelity": fid_avg, "F1-Fidelity": f1_avg, "Weight": 0}, ignore_index=True)
+    summary = summary.append({"Relation": "Std", "Coverage": cov_std, "Fidelity": fid_std, "F1-Fidelity": f1_std, "Weight": 0}, ignore_index=True)
+    logout("\n" + str(summary), "s")
+    return summary
+
+
+def plot_params(results):
+    l1s = []
+    alphas = []
+    losses = []
+    loss2id = {"log":1, "modified_huber":2, "perceptron":3}
+    for idx, result in results.iterrows():
+        if type(result["params"]) != str: continue
+        params = eval(result["params"])
+        l1s.append(params["l1_ratio"])
+        alphas.append(params["alpha"])
+        losses.append(loss2id[params["loss"]])
+    bins = [0] + list(np.unique(l1s) + 0.0001)
+    l1_fig = plot_hist(l1s, bins=bins, color="g", title="Best L1 ratio values")
+    bins = [0] + list(np.unique(alphas) + 0.0001)
+    alpha_fig = plot_hist(alphas, bins=bins, color="b", title="Best alpha values")
+    bins = [0] + list(np.unique(losses) + 0.0001)
+    losses_fig = plot_hist(losses, bins=bins, color="r", title="Best loss types")
+    return [l1_fig, alpha_fig, losses_fig]
+
+
+def locality_plot(root_fp, args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000,1500,2000,2500]):
+    summary_means = pd.DataFrame(columns=["k","Coverage","Fidelity","F1-Fidelity"])
+    summary_stds = pd.DataFrame(columns=["k","Coverage","Fidelity","F1-Fidelity"])
+    for k in locality:
+        result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_local3_" + str(k))
+        results_fp = os.path.join(root_fp, "results", result_name)
+        result = load_data(results_fp)
+        summary = get_summary(result)
+        summary_means = summary_means.append(summary.iloc[-2], ignore_index=True)
+        summary_stds = summary_stds.append(summary.iloc[-1], ignore_index=True)
+    names = format_method_names([args["explain"]["xmodel"]])
+    colors = format_method_colors([args["explain"]["xmodel"]])
+    linestyles = format_method_linestyles([args["explain"]["xmodel"]])
+    yvals = np.expand_dims(summary_means["F1-Fidelity"].values,0) * 100
+    plot1 = plot_line(locality, yvals, names, colors, linestyles,
+                     ylabel="F1-Fidelity %", titles=None, ylim=None, yerr=None,
+                     xticks=None, top_title=None)
+    yvals = np.expand_dims(summary_means["Coverage"].values,0) * 100
+    plot2 = plot_line(locality, yvals, names, colors, linestyles,
+                     ylabel="Coverage %", titles=None, ylim=None, yerr=None,
+                     xticks=None, top_title=None)
+    return [plot1, plot2]
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="Generates output plots and statistical tests for all experiments.")
-    parser.add_argument("-es", dest="exp_setting", type=str, help="select Experimental Setting for visualizations")
-    parser.add_argument('-mc', dest='methods', type=str, default=["offline", "finetune", "L2", "SI", "PNN", "CWR", "DGR"],
-                        nargs='+', help='Methods to compare for outputs')
-    parser.add_argument("-t", dest="tag", type=str, help="Tag name for outputs")
-    args = parser.parse_args()
-
+    exp_config = load_config("Experiment Visualizations")
     plt.rcParams.update({'font.weight': 'bold'})
+    figs = []
+    main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
+    
+    figs += locality_plot(main_fp, exp_config)
 
-    if args.exp_setting == "robot":  # optional plots not in paper commented out
-        # analogy = get_plots("THOR_U", "analogy", args.methods)
-        # transe = get_plots("THOR_U", "transe", args.methods)
-        avg = get_avg_plots(["THOR_U"], ["transe","analogy"], args.methods, avg_name="Robot Evaluation " + args.tag.upper())
-        # figs2pdf(analogy + transe + avg, "robot_results_" + args.tag + ".pdf")
-        figs2pdf(avg, "robot_results_" + args.tag + ".pdf")
-        get_experiment_stats("THOR_U", "transe", args.methods, "robot_transe_" + args.tag + ".txt")
-        get_experiment_stats("THOR_U", "analogy", args.methods, "robot_analogy_" + args.tag + ".txt")
-    elif args.exp_setting == "bench":
-        wn_analogy = get_plots("WN18RR", "analogy", args.methods)
-        wn_transe = get_plots("WN18RR", "transe", args.methods)
-        fb_analogy = get_plots("FB15K237", "analogy", args.methods)
-        fb_transe = get_plots("FB15K237", "transe", args.methods)
-        avg = get_avg_plots(["WN18RR", "FB15K237"], ["transe", "analogy"], args.methods, avg_name="Benchmark Evaluation")
-        figs2pdf(wn_analogy + wn_transe + fb_analogy + fb_transe + avg, "bench_results.pdf")
-        # figs2pdf(avg, "bench_results.pdf")
-        get_experiment_stats("WN18RR", "transe", args.methods, "wn_transe.txt")
-        get_experiment_stats("WN18RR", "analogy", args.methods, "wn_analogy.txt")
-        get_experiment_stats("FB15K237", "transe", args.methods, "fb_transe.txt")
-        get_experiment_stats("FB15K237", "analogy", args.methods, "fb_analogy.txt")
-    else:
-        logout("Experiment Setting not recognized", "e")
+    results_fp = os.path.join(main_fp, "results", "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + str(exp_config["explain"]["locality_k"])))
+    if not os.path.exists(results_fp):
+        logout("Experiment results pickle does not exist: " + str(results_fp), "f")
+    results = load_data(results_fp)
+    result_summary = get_summary(results)
+    pdb.set_trace()
+    
+    title_str = "Student: " + exp_config["explain"]["xmodel"] + ", Locality: " + exp_config["explain"]["locality"]
+    fig = plot_table(stats=result_summary[result_summary.columns[1:]].to_numpy(dtype=float),
+                     row_labels=result_summary["Relation"].to_numpy(str),
+                     col_labels=result_summary.columns[1:].to_numpy(str),
+                     title=title_str)
+    figs.append(fig)
+    figs += plot_params(results)
+    figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + str(exp_config["explain"]["locality_k"])))
+    figs2pdf(figs, figs_fp)
+

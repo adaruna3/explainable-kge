@@ -22,6 +22,9 @@ be working.
 
 
 ## ToDos
+I. Try different versions of logit
+    e. Plot all results
+    d. Run c. for the FB dataset
 II. Add toggle for using decision tree
     a. How to generate dataset
 III. Add toggle for enrich the knowledge graph
