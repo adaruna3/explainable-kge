@@ -22,11 +22,14 @@ be working.
 
 
 ## ToDos
-I. Try different versions of logit
-    e. Plot all results
-    d. Run c. for the FB dataset
+I. Locality results
+    a. Get locality plot with std for our dataset
+    a. Get locality plot with std for one XKE dataset
 II. Add toggle for using decision tree
-    a. How to generate dataset
+    a. Check assumptions
+        - locality helps - true
+        - small number of features (paths) are decsion makers
+    b. Building dataset
 III. Add toggle for enrich the knowledge graph
     a. add reverse and similarity relations to specific entities
 IV. Add methods to corrupt the dataset
