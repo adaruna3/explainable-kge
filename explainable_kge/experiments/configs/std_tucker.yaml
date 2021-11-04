@@ -65,8 +65,8 @@ continual:
   # Enable Offline to have access to all triples (bool)
   enable_offline: False
 explain:
-  xmodel: "logit"
-  locality: "global"
+  xmodel: "decision_tree"
+  locality: "local3"
   knn_k: 50
   ghat_k: 3
-  locality_k: 50
+  locality_k: 20
