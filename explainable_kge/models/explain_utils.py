@@ -6,9 +6,11 @@ import itertools
 import pickle
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import vstack
 from sklearn.linear_model import SGDClassifier
+from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.model_selection import GridSearchCV
 from sklearn.feature_extraction import DictVectorizer
 import tqdm
@@ -17,6 +19,7 @@ import torch
 
 from explainable_kge.models import model_utils
 from explainable_kge.logger.terminal_utils import logout
+from explainable_kge.logger.viz_utils import figs2pdf
 
 import pdb
 
@@ -345,7 +348,7 @@ def get_reasons(row, n=3):
     return output
 
 
-def explain_example(ex_fp, rel, example_num, feats, feat_names, coeff, head, tail, pred, label):
+def explain_logit_example(ex_fp, rel, example_num, feats, feat_names, coeff, head, tail, pred, label):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     feats = feats.todense()
@@ -357,6 +360,30 @@ def explain_example(ex_fp, rel, example_num, feats, feat_names, coeff, head, tai
     final_reasons['y_logit'] = pred
     final_reasons['y_hat'] = label
     final_reasons.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
+
+
+def explain_dt_example(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label):
+    if not os.path.exists(ex_fp):
+        os.makedirs(ex_fp)
+    file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail)
+    plt.axis("tight")
+    # save whole tree
+    plot_tree(model, class_names=["False", "True"], feature_names=feat_names, node_ids=True, filled=True)
+    plt.savefig(os.path.join(ex_fp, file_name + ".pdf"), bbox_inches='tight', dpi=100)
+    # save decision path
+    explanation_df = pd.DataFrame(columns=["rule","head","tail","y_logit","y_hat"])
+    explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
+    decision_path_nodes = model.decision_path(example).indices
+    leaf = model.apply(example)
+    for node in decision_path_nodes:
+        if node == leaf: continue
+        feat_idx = model.tree_.feature[node]
+        path = feat_names[feat_idx].replace("-",",").replace("_","Reverse ")[1:-1]
+        if example[0,feat_idx]:
+            explanation_df = explanation_df.append({"rule": "Path {} exists".format(path)}, ignore_index=True)
+        else:
+            explanation_df = explanation_df.append({"rule": "Path {} missing".format(path)}, ignore_index=True)
+    explanation_df.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
 
 
 def get_local_data1(head, tail, tr_heads, tr_tails, toggle='tail'):
@@ -457,19 +484,6 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, emb
                     results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
                                               "predict": 0, "train_size": None, "params": None}, ignore_index=True)
                     continue
-    #     c. Train logit model using scikit-learn
-            n_jobs = multiprocessing.cpu_count()
-            param_grid_logit = [{
-                'l1_ratio': [.1, .5, .7, .9, .95, .99, 1],
-                'alpha': [0.01, 0.001, 0.0001],
-                'loss': ["log"],
-                'penalty': ["elasticnet"],
-                'max_iter': [100000],
-                'tol': [1e-3],
-                'class_weight': ["balanced"],
-                'n_jobs': [n_jobs],
-                'random_state': [1],
-            }]
             # checks if training feasible
             classes, counts = np.unique(train_y_local, return_counts=True)
             if len(classes) <= 1:
@@ -483,19 +497,41 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, emb
                     results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
                                              "predict": 0, "train_size": None, "params": None}, ignore_index=True)
                     continue
+    #     c. Train logit model using scikit-learn
             if fit_model:
-                num_folds = min(5, min(counts))
-                gs = GridSearchCV(SGDClassifier(), param_grid_logit, n_jobs=n_jobs, refit=True, cv=num_folds)
-                gs.fit(train_x_local, train_y_local)
-                xmodel = gs.best_estimator_
+                if args["explain"]["xmodel"] == "logit":
+                    n_jobs = multiprocessing.cpu_count()
+                    param_grid_logit = [{
+                        'l1_ratio': [.1, .5, .7, .9, .95, .99, 1],
+                        'alpha': [0.01, 0.001, 0.0001],
+                        'loss': ["log"],
+                        'penalty': ["elasticnet"],
+                        'max_iter': [100000],
+                        'tol': [1e-3],
+                        'class_weight': ["balanced"],
+                        'n_jobs': [n_jobs],
+                        'random_state': [1],
+                    }]
+                    num_folds = min(5, min(counts))
+                    gs = GridSearchCV(SGDClassifier(), param_grid_logit, n_jobs=n_jobs, refit=True, cv=num_folds)
+                    gs.fit(train_x_local, train_y_local)
+                    xmodel = gs.best_estimator_
+                    best_params = str(gs.best_params_)
+                elif args["explain"]["xmodel"] == "decision_tree":
+                    xmodel = DecisionTreeClassifier(random_state=1)
+                    xmodel.fit(train_x_local, train_y_local)
+                    best_params = str(xmodel.get_params())
             prediction = xmodel.predict(test_x[test_idx]).item()
-            explain_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
+            if args["explain"]["xmodel"] == "logit":
+                explain_logit_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
+            else:
+                explain_dt_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
             results = results.append({"rel": rel,
                                       "sample": test_pair,
                                       "label": te_y[test_idx],
                                       "predict": prediction,
                                       "train_size": train_x_local.shape,
-                                      "params": str(gs.best_params_)}, ignore_index=True)
+                                      "params": best_params}, ignore_index=True)
             if args["explain"]["locality"] == "global":
                 fit_model = False
     with open(results_fp, "wb") as f:

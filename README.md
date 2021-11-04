@@ -31,13 +31,8 @@ it and run `sbt test` inside the `pra` submodule.
 ## ToDos
 I. Locality results
     a. Get locality plot with std for our dataset
-    a. Get locality plot with std for one XKE dataset
-II. Add toggle for using decision tree
-    a. Check assumptions
-        - locality helps - true
-        - small number of features (paths) are decsion makers
-    b. Building dataset
-III. Add toggle for enrich the knowledge graph
-    a. add reverse and similarity relations to specific entities
+    c. Get locality plot with std for our dataset with DT
+II. Add methods to get explanations from decision trees
+    c. Get GROUNDED explanations for each prediction
 IV. Add methods to corrupt the dataset
 V. Check explanations coming out of corrupted dataset
