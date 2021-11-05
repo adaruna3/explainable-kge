@@ -730,6 +730,46 @@ def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,
         plots.append(lp)
     return plots
 
+def best_locality(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000,1500,2000,2500]):
+    root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
+    # load all the data
+    summarys = pd.DataFrame(columns=["log_num","k","Relation","Coverage","Fidelity","F1-Fidelity", "Weight"])
+    for log_num in range(1,6):
+        folder_path = root_fp + "_" + str(log_num)
+        for k in locality:
+            result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_local3_" + str(k))
+            results_fp = os.path.join(folder_path, "results", result_name)
+            result = load_data(results_fp)
+            summary = get_summary(result)
+            summary["k"] = k
+            summary["log_num"] = log_num
+            summarys = summarys.append(summary, ignore_index=True)
+    # average across log_num
+    rel_summary = pd.DataFrame(columns=["k","Relation","F1-Fidelity","Weight"])
+    relations = np.unique(summary["Relation"].to_numpy(dtype=str))
+    relations = [rel for rel in relations if rel != "Mean" and rel != "Std"]
+    for rel in relations:
+        for k in locality:
+            rel_summ = summarys.loc[summarys["Relation"].isin([rel]),:]
+            k_rel_summ = rel_summ.loc[rel_summ["k"].isin([k]),:]
+            wavg, wstd = weighted_avg_and_std(k_rel_summ["F1-Fidelity"].values, k_rel_summ["Weight"].values)
+            rel_summary = rel_summary.append({"k":k,"Relation":rel,"Avg F1-Fidelity":wavg,"Std F1-Fidelity":wstd,"Weight":np.sum(k_rel_summ["Weight"].values)}, ignore_index=True)
+    # select the best locality result for each relation
+    best_summary = pd.DataFrame(columns=["k","Relation","Avg F1-Fidelity","Std F1-Fidelity","Weight"])
+    for rel in relations:
+        rel_summ = rel_summary.loc[rel_summary["Relation"].isin([rel]),:]
+        best_summary = best_summary.append(rel_summ.loc[rel_summ["Avg F1-Fidelity"].idxmax()], ignore_index=True)
+    wavg, _ = weighted_avg_and_std(best_summary["Avg F1-Fidelity"].values, best_summary["Weight"].values)
+    wstd, _ = weighted_avg_and_std(best_summary["Std F1-Fidelity"].values, best_summary["Weight"].values)
+    best_summary = best_summary.append({"Relation":"Overall","Avg F1-Fidelity":wavg,"Std F1-Fidelity":wstd}, ignore_index=True)
+    best_summary = best_summary[["Relation","Avg F1-Fidelity","Std F1-Fidelity","Weight","k"]]
+    # plot table
+    title_str = "Student: " + exp_config["explain"]["xmodel"] + ", Locality: Best"
+    fig = plot_table(stats=best_summary[best_summary.columns[1:]].to_numpy(dtype=float),
+                     row_labels=best_summary["Relation"].to_numpy(str),
+                     col_labels=best_summary.columns[1:].to_numpy(str),
+                     title=title_str)
+    return [fig]
 
 def global_plot(args):
     # load the data
@@ -773,6 +813,7 @@ if __name__ == "__main__":
     figs = []
     figs += locality_plot(exp_config)
     figs += global_plot(exp_config)
+    figs += best_locality(exp_config)
     main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
     figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"]))
     figs2pdf(figs, figs_fp)

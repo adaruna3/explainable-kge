@@ -362,14 +362,15 @@ def explain_logit_example(ex_fp, rel, example_num, feats, feat_names, coeff, hea
     final_reasons.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
 
 
-def explain_dt_example(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label):
+def explain_dt_example(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label, plot_tree):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail)
-    plt.axis("tight")
-    # save whole tree
-    plot_tree(model, class_names=["False", "True"], feature_names=feat_names, node_ids=True, filled=True)
-    plt.savefig(os.path.join(ex_fp, file_name + ".pdf"), bbox_inches='tight', dpi=100)
+    if plot_tree:
+        # save whole tree
+        plt.axis("tight")
+        plot_tree(model, class_names=["False", "True"], feature_names=feat_names, node_ids=True, filled=True)
+        plt.savefig(os.path.join(ex_fp, file_name + ".pdf"), bbox_inches='tight', dpi=100)
     # save decision path
     explanation_df = pd.DataFrame(columns=["rule","head","tail","y_logit","y_hat"])
     explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
@@ -525,7 +526,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, emb
             if args["explain"]["xmodel"] == "logit":
                 explain_logit_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
             else:
-                explain_dt_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
+                explain_dt_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
             results = results.append({"rel": rel,
                                       "sample": test_pair,
                                       "label": te_y[test_idx],

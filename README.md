@@ -30,9 +30,8 @@ it and run `sbt test` inside the `pra` submodule.
 
 ## ToDos
 I. Locality results
-    a. Get locality plot with std for our dataset
-    c. Get locality plot with std for our dataset with DT
-II. Add methods to get explanations from decision trees
-    c. Get GROUNDED explanations for each prediction
-IV. Add methods to corrupt the dataset
-V. Check explanations coming out of corrupted dataset
+    d. get BEST results for DT local
+II. Get GROUNDED explanations for each prediction
+    a. 
+III. Add methods to corrupt the dataset
+IV. Check explanations coming out of corrupted dataset
