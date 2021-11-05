@@ -1,8 +1,9 @@
+from argparse import Action
 import os
 from copy import copy
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-from math import sqrt
+from math import log, sqrt
 import pickle
 
 # for stats tests
@@ -207,8 +208,8 @@ def plot_mbar_stacked(values1, values2, names, colors, hatches, ylabel=None, tit
 
 
 def plot_line(xvalues, yvalues, names, colors, linestyles,
-              ylabel=None, titles=None, ylim=None, yerr=None,
-              xticks=None, top_title=None):
+              ylabel=None, ylim=None, yerr=None, xlim=None,
+              xticks=None, top_title=None, legend_loc="best", anchor=(0,0)):
 
     num_lines = yvalues.shape[0]
 
@@ -223,12 +224,15 @@ def plot_line(xvalues, yvalues, names, colors, linestyles,
                             color=colors[j], alpha=0.2)
         lines.append(line)
 
-    ax.legend(lines, names,
-              loc='best',
+    ax.legend(lines, names, bbox_to_anchor=anchor,
+              loc=legend_loc,
               ncol=1, fancybox=True, shadow=True)
 
     if ylim is not None:
         ax.set_ylim(ylim)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
 
     if xticks is not None:
         ax.set_xlim([xticks[0][0], xticks[0][-1]])
@@ -493,40 +497,84 @@ def figs2pdf(figs, filepath):
     pdf.close()
 
 
-def format_method_names(methods):
+def format_names(methods):
     method_names = []
     method2name = {
         "logit": "Logistic Classification",
+        "HasEffect": "(Action) Has Effect (State)",
+        "InverseActionOf": "(Action) Inverse Action Of (Action)",
+        "InverseStateOf": "(State) Inverse State Of (State)",
+        "LocInRoom": "(Location) In Room (Room)",
+        "ObjCanBe": "(Object) Can Be (Action)",
+        "ObjInLoc": "(Object) In Location (Location)",
+        "ObjInRoom": "(Object) In Room (Room)",
+        "ObjOnLoc": "(Object) On Location (Location)",
+        "ObjUsedTo": "(Object) Used To (Action)",
+        "ObjhasState": "(Object) Has State (State)",
+        "OperatesOn": "(Object) Operates On (Object)",
     }
     for method in methods:
         method_names.append(method2name[method])
     return method_names
 
 
-def format_method_colors(methods):
+def format_colors(methods):
     method_colors = []
     method2color = {
         "logit": "m",
+        "HasEffect": "b",
+        "InverseActionOf": "m",
+        "InverseStateOf": "c",
+        "LocInRoom": "g",
+        "ObjCanBe": "r",
+        "ObjInLoc": "y",
+        "ObjInRoom": "k",
+        "ObjOnLoc": "violet",
+        "ObjUsedTo": "orangered",
+        "ObjhasState": "pink",
+        "OperatesOn": "yellowgreen",
     }
     for method in methods:
         method_colors.append(method2color[method])
     return method_colors
 
 
-def format_method_linestyles(methods):
+def format_linestyles(methods):
     method_markers = []
     method2marker = {
-        "logit": ":",
+        "logit": "solid",
+        "HasEffect": "solid",
+        "InverseActionOf": "solid",
+        "InverseStateOf": "solid",
+        "LocInRoom": "solid",
+        "ObjCanBe": "solid",
+        "ObjInLoc": "solid",
+        "ObjInRoom": "solid",
+        "ObjOnLoc": "solid",
+        "ObjUsedTo": "solid",
+        "ObjhasState": "solid",
+        "OperatesOn": "solid",
     }
     for method in methods:
         method_markers.append(method2marker[method])
     return method_markers
 
 
-def format_method_hatches(methods):
+def format_hatches(methods):
     method_markers = []
     method2marker = {
         "logit": "//",
+        "HasEffect": "//",
+        "InverseActionOf": "//",
+        "InverseStateOf": "//",
+        "LocInRoom": "//",
+        "ObjCanBe": "//",
+        "ObjInLoc": "//",
+        "ObjInRoom": "//",
+        "ObjOnLoc": "//",
+        "ObjUsedTo": "//",
+        "ObjhasState": "//",
+        "OperatesOn": "//",
     }
     for method in methods:
         method_markers.append(method2marker[method])
@@ -612,52 +660,119 @@ def plot_params(results):
     return [l1_fig, alpha_fig, losses_fig]
 
 
-def locality_plot(root_fp, args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000,1500,2000,2500]):
-    summary_means = pd.DataFrame(columns=["k","Coverage","Fidelity","F1-Fidelity"])
-    summary_stds = pd.DataFrame(columns=["k","Coverage","Fidelity","F1-Fidelity"])
+def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000,1500,2000,2500]):
+    root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
+    # load all the data
+    summarys = pd.DataFrame(columns=["log_num","k","Relation","Coverage","Fidelity","F1-Fidelity", "Weight"])
+    for log_num in range(1,6):
+        folder_path = root_fp + "_" + str(log_num)
+        for k in locality:
+            result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_local3_" + str(k))
+            results_fp = os.path.join(folder_path, "results", result_name)
+            result = load_data(results_fp)
+            summary = get_summary(result)
+            summary["k"] = k
+            summary["log_num"] = log_num
+            summarys = summarys.append(summary, ignore_index=True)
+    # average across log_num
+    rel_avg_summary = pd.DataFrame(columns=["k","Relation","F1-Fidelity","Weight"])
+    rel_std_summary = pd.DataFrame(columns=["k","Relation","F1-Fidelity","Weight"])
+    relations = np.unique(summary["Relation"].to_numpy(dtype=str))
+    relations = [rel for rel in relations if rel != "Mean" and rel != "Std"]
+    for rel in relations:
+        for k in locality:
+            rel_summ = summarys.loc[summarys["Relation"].isin([rel]),:]
+            k_rel_summ = rel_summ.loc[rel_summ["k"].isin([k]),:]
+            wavg, wstd = weighted_avg_and_std(k_rel_summ["F1-Fidelity"].values, k_rel_summ["Weight"].values)
+            rel_avg_summary = rel_avg_summary.append({"k":k,"Relation":rel,"F1-Fidelity":wavg,"Weight":np.sum(k_rel_summ["Weight"].values)}, ignore_index=True)
+            rel_std_summary = rel_std_summary.append({"k":k,"Relation":rel,"F1-Fidelity":wstd,"Weight":np.sum(k_rel_summ["Weight"].values)}, ignore_index=True)
+    # prepare numpy arrays
+    line_avg = np.zeros(shape=(0,len(locality)))
+    line_std = np.zeros(shape=(0,len(locality)))
+    for rel in relations:
+        avg_rel_summ = rel_avg_summary.loc[rel_avg_summary["Relation"].isin([rel]),:]
+        line_avg = np.append(line_avg, [avg_rel_summ["F1-Fidelity"].to_numpy(dtype=float)], axis=0)
+        std_rel_summ = rel_std_summary.loc[rel_std_summary["Relation"].isin([rel]),:]
+        line_std = np.append(line_std, [std_rel_summ["F1-Fidelity"].to_numpy(dtype=float)], axis=0)
+    # plot each relation type
+    names = format_names(relations)
+    colors = format_colors(relations)
+    linestyles = format_linestyles(relations)
+    plots = []
+    for rel_id in range(len(relations)):
+        for right_xlim in [100,300,1000]:
+            line = np.expand_dims(line_avg[rel_id,:]*100.0, axis=0)
+            line_err = np.expand_dims(line_std[rel_id,:]*100.0, axis=0)
+            lp = plot_line(locality, line, [names[rel_id]], [colors[rel_id]], [linestyles[rel_id]],
+                            ylabel="F1-Fidelity %", ylim=None, yerr=line_err, xlim=(2,right_xlim),
+                            top_title="Effect of Locality on {} F1-Fidelity".format(names[rel_id]),
+                            legend_loc="center", anchor=(0.5,-0.14))
+            plots.append(lp)
+    # average across log_num and rel
+    avg_summary = pd.DataFrame(columns=["k","avg","std"])
     for k in locality:
-        result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_local3_" + str(k))
-        results_fp = os.path.join(root_fp, "results", result_name)
-        result = load_data(results_fp)
-        summary = get_summary(result)
-        summary_means = summary_means.append(summary.iloc[-2], ignore_index=True)
-        summary_stds = summary_stds.append(summary.iloc[-1], ignore_index=True)
-    names = format_method_names([args["explain"]["xmodel"]])
-    colors = format_method_colors([args["explain"]["xmodel"]])
-    linestyles = format_method_linestyles([args["explain"]["xmodel"]])
-    yvals = np.expand_dims(summary_means["F1-Fidelity"].values,0) * 100
-    plot1 = plot_line(locality, yvals, names, colors, linestyles,
-                     ylabel="F1-Fidelity %", titles=None, ylim=None, yerr=None,
-                     xticks=None, top_title=None)
-    yvals = np.expand_dims(summary_means["Coverage"].values,0) * 100
-    plot2 = plot_line(locality, yvals, names, colors, linestyles,
-                     ylabel="Coverage %", titles=None, ylim=None, yerr=None,
-                     xticks=None, top_title=None)
-    return [plot1, plot2]
+        k_summ = rel_avg_summary.loc[rel_avg_summary["k"].isin([k]),:]
+        wavg, _ = weighted_avg_and_std(k_summ["F1-Fidelity"].values, k_summ["Weight"].values)
+        k_summ = rel_std_summary.loc[rel_std_summary["k"].isin([k]),:]
+        wstd, _ = weighted_avg_and_std(k_summ["F1-Fidelity"].values, k_summ["Weight"].values)
+        avg_summary = avg_summary.append({"k":k,"avg":wavg,"std":wstd}, ignore_index=True)
+    # plot average across relations
+    names = format_names([args["explain"]["xmodel"]])
+    colors = format_colors([args["explain"]["xmodel"]])
+    linestyles = format_linestyles([args["explain"]["xmodel"]])
+    for right_xlim in [100,300,1000]:
+        line = np.expand_dims(avg_summary["avg"].values*100.0, axis=0)
+        line_err = np.expand_dims(avg_summary["std"].values*100.0, axis=0)
+        lp = plot_line(locality, line, names, colors, linestyles,
+                       ylabel="F1-Fidelity %", yerr=line_err, xlim=(2,right_xlim),
+                       top_title="Effect of Locality on {} F1-Fidelity".format(args["explain"]["xmodel"]),
+                       legend_loc="center", anchor=(0.5,-0.14))
+        plots.append(lp)
+    return plots
+
+
+def global_plot(args):
+    # load the data
+    root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
+    summarys = pd.DataFrame(columns=["log_num","Relation","Coverage","Fidelity","F1-Fidelity","Weight"])
+    for log_num in range(1,6):
+        folder_path = root_fp + "_" + str(log_num)
+        result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_global_" + str(exp_config["explain"]["locality_k"]))
+        results_fp = os.path.join(folder_path, "results", result_name)
+        if not os.path.exists(results_fp):
+            logout("Experiment results pickle does not exist: " + str(results_fp), "f")
+            exit()
+        results = load_data(results_fp)
+        result_summary = get_summary(results)
+        result_summary["log_num"] = log_num
+        summarys = summarys.append(result_summary)
+    # average across log_num
+    rel_summary = pd.DataFrame(columns=["Relation","Avg F1-Fidelity","Std F1-Fidelity","Weight"])
+    relations = np.unique(summarys["Relation"].to_numpy(dtype=str))
+    relations = [rel for rel in relations if rel != "Mean" and rel != "Std"]
+    for rel in relations:
+        rel_summ = summarys.loc[summarys["Relation"].isin([rel]),:]
+        wavg, wstd = weighted_avg_and_std(rel_summ["F1-Fidelity"].values, rel_summ["Weight"].values)
+        rel_summary = rel_summary.append({"Relation":rel,"Avg F1-Fidelity":wavg, "Std F1-Fidelity":wstd,"Weight":np.sum(rel_summ["Weight"].values)}, ignore_index=True)
+    # average across rels
+    wavg, _ = weighted_avg_and_std(rel_summary["Avg F1-Fidelity"].values, rel_summary["Weight"].values)
+    wstd, _ = weighted_avg_and_std(rel_summary["Std F1-Fidelity"].values, rel_summary["Weight"].values)
+    rel_summary = rel_summary.append({"Relation":"Overall","Avg F1-Fidelity":wavg,"Std F1-Fidelity":wstd}, ignore_index=True)
+    # plot table
+    title_str = "Student: " + exp_config["explain"]["xmodel"] + ", Locality: Global"
+    fig = plot_table(stats=rel_summary[rel_summary.columns[1:]].to_numpy(dtype=float),
+                     row_labels=rel_summary["Relation"].to_numpy(str),
+                     col_labels=rel_summary.columns[1:].to_numpy(str),
+                     title=title_str)
+    return [fig]
 
 
 if __name__ == "__main__":
     exp_config = load_config("Experiment Visualizations")
     plt.rcParams.update({'font.weight': 'bold'})
     figs = []
+    figs += locality_plot(exp_config)
+    figs += global_plot(exp_config)
     main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
-    
-    figs += locality_plot(main_fp, exp_config)
-
-    results_fp = os.path.join(main_fp, "results", "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + str(exp_config["explain"]["locality_k"])))
-    if not os.path.exists(results_fp):
-        logout("Experiment results pickle does not exist: " + str(results_fp), "f")
-    results = load_data(results_fp)
-    result_summary = get_summary(results)
-    pdb.set_trace()
-    
-    title_str = "Student: " + exp_config["explain"]["xmodel"] + ", Locality: " + exp_config["explain"]["locality"]
-    fig = plot_table(stats=result_summary[result_summary.columns[1:]].to_numpy(dtype=float),
-                     row_labels=result_summary["Relation"].to_numpy(str),
-                     col_labels=result_summary.columns[1:].to_numpy(str),
-                     title=title_str)
-    figs.append(fig)
-    figs += plot_params(results)
-    figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + str(exp_config["explain"]["locality_k"])))
+    figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"]))
     figs2pdf(figs, figs_fp)
-
