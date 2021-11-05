@@ -328,7 +328,7 @@ def parse_feature_matrix(filepath):
     return np.array(heads), np.array(tails), np.array(labels), feat_dicts
 
 
-def get_reasons(row, n=3):
+def get_reasons(row, n=10):
     # Remove zero elements
     reasons = row[row != 0]
     # Select the top n_examples elements
