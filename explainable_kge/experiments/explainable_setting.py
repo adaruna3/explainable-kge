@@ -82,7 +82,10 @@ if __name__ == "__main__":
     #     c. Form G^ from all T triples classified by embedding
     ghat_fp = os.path.join(exp_fp, "ghat.tsv")
     if not os.path.exists(ghat_fp):
-        x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, ghat_fp, max_neighbors=exp_config["explain"]["ghat_k"])
+        g_hat = x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, ghat_fp, max_neighbors=exp_config["explain"]["ghat_k"])
+    else:
+        g_hat = pd.read_csv(ghat_fp, sep="\t", header=None).to_numpy(dtype=str)
+    g_hat_dicts = x_utils.process_ghat(g_hat, tr_de_d.e2i, tr_de_d.r2i)
     # 2. Run SFE on G^
     sfe_fp = os.path.join(exp_fp, "results")
     if not os.path.exists(os.path.join(sfe_fp,exp_config["model"]["name"])):
@@ -96,7 +99,8 @@ if __name__ == "__main__":
     if not os.path.exists(results_fp):
         results = x_utils.get_explainable_results(exp_config, knn, exp_config["explain"]["locality_k"],
                                                   tr_de_d.r2i, tr_de_d.e2i, tr_de_d.i2e,
-                                                  sfe_fp, results_fp, ent_embeddings)
+                                                  sfe_fp, results_fp, ent_embeddings,
+                                                  exp_model, g_hat_dicts, device)
     else:
         with open(results_fp, "rb") as f:
             results = pickle.load(f)

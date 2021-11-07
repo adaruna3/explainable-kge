@@ -128,7 +128,27 @@ def generate_ghat(args, knn, dataset, model, thresholds, device, ghat_path=None,
     if ghat_path is not None:
         pd.DataFrame(g_hat).to_csv(ghat_path, sep="\t", index=False, header=False)
     logout("Generated G_hat. Size is " + str(len(g_hat)), "s")
-    return g_hat
+    return np.asarray(g_hat, dtype=str)
+
+
+def process_ghat(ghat, e2i, r2i):
+    # convert ghat into usable lookup table
+    valid_tails = {}
+    valid_heads = {}
+    for i in range(ghat.shape[0]):
+        h, r, t = ghat[i,:]
+        h_i = e2i[h]
+        r_i = r2i[r]
+        t_i = e2i[t]
+        if (r_i,t_i) not in valid_heads:
+            valid_heads[(r_i,t_i)] = [h_i]
+        elif h_i not in valid_heads[(r_i,t_i)]:
+            valid_heads[(r_i,t_i)].append(h_i)
+        if (r_i,h_i) not in valid_tails:
+            valid_tails[(r_i,h_i)] = [t_i]
+        elif t_i not in valid_tails[(r_i,h_i)]:
+            valid_tails[(r_i,h_i)].append(t_i)
+    return valid_heads, valid_tails
     
 
 def load_datasets_to_dataframes(args):
@@ -345,24 +365,25 @@ def get_reasons(row, n=10):
     for i in range(counter, n):
         output['reason' + str(i)] = "n/a"
         output['relevance' + str(i)] = "n/a"
-    return output
+    return output, top_reasons_abs.index.to_numpy(dtype=str)
 
 
-def explain_logit_example(ex_fp, rel, example_num, feats, feat_names, coeff, head, tail, pred, label):
+def get_logit_explain_paths(ex_fp, rel, example_num, feats, feat_names, coeff, head, tail, pred, label):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     feats = feats.todense()
     explanations = np.multiply(feats, coeff).reshape(1, -1)
     example_df = pd.DataFrame(explanations, columns=feat_names)
-    final_reasons = example_df.apply(get_reasons, axis=1)
+    final_reasons, paths = example_df.apply(get_reasons, axis=1)[0]
     final_reasons['head'] = head
     final_reasons['tail'] = tail
     final_reasons['y_logit'] = pred
     final_reasons['y_hat'] = label
     final_reasons.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
+    return paths
 
 
-def explain_dt_example(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label, plot_tree):
+def get_dt_explain_paths(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label, plot_tree):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail)
@@ -376,15 +397,227 @@ def explain_dt_example(ex_fp, rel, example_num, example, model, feat_names, head
     explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
     decision_path_nodes = model.decision_path(example).indices
     leaf = model.apply(example)
+    paths = []
     for node in decision_path_nodes:
         if node == leaf: continue
         feat_idx = model.tree_.feature[node]
         path = feat_names[feat_idx].replace("-",",").replace("_","Reverse ")[1:-1]
         if example[0,feat_idx]:
             explanation_df = explanation_df.append({"rule": "Path {} exists".format(path)}, ignore_index=True)
+            paths.append(feat_names[feat_idx])
         else:
             explanation_df = explanation_df.append({"rule": "Path {} missing".format(path)}, ignore_index=True)
     explanation_df.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
+    return np.asarray(paths, dtype=str)
+
+
+def fr_hop(args, r_i, h_i, t_i, model, device):
+    # given head and relation, return most likely tail
+    if len(t_i) == 1: return t_i[0]
+    bh = torch.tensor(h_i, dtype=torch.long).repeat(len(t_i))
+    br = torch.tensor(r_i, dtype=torch.long).repeat(len(t_i))
+    bt = torch.tensor(t_i, dtype=torch.long)
+    if args["model"]["name"] == "tucker":
+        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))[0,bt]
+        _, sort_idxs = torch.sort(scores, descending=True)
+        sort_idxs = sort_idxs.cpu().numpy()
+    else:
+        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
+        sort_idxs = np.argsort(scores)
+    return t_i[sort_idxs[0]]
+
+
+def bk_hop(args, r_i, t_i, h_i, model, device):
+    # given tail and relation, return most likely head
+    if len(h_i) == 1: return h_i[0]
+    bh = torch.tensor(h_i, dtype=torch.long)
+    br = torch.tensor(r_i, dtype=torch.long).repeat(len(bh))
+    bt = torch.tensor(t_i, dtype=torch.long).repeat(len(bh))
+    if args["model"]["name"] == "tucker":
+        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+        scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+        _, sort_idxs = torch.sort(scores, descending=True)
+        sort_idxs = sort_idxs.cpu().numpy()
+    else:
+        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
+        sort_idxs = np.argsort(scores)
+    return h_i[sort_idxs[0]]
+
+
+def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, model, device):
+    valid_heads, valid_tails = ghat
+    if fr_r_str[0] != "_" and bk_r_str[0] != "_":
+        # neither hop is reversed
+        fr_r_i = r2i[fr_r_str]
+        fr_t_i = valid_tails[(fr_r_i,fr_h_i)]
+        bk_r_i = r2i[bk_r_str]
+        bk_h_i = valid_heads[(bk_r_i,bk_t_i)]
+        connections = list(set(fr_t_i).intersection(set(bk_h_i)))
+        assert len(connections)
+        if len(connections) == 1: return connections[0]
+        bc = torch.tensor(connections, dtype=torch.long)
+        fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
+        fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            fr_scores = model.predict(fr_bh.contiguous().to(device),
+                                      fr_br.contiguous().to(device))[0,bc]
+        else:
+            fr_scores = model.predict(fr_bh.contiguous().to(device),
+                                      fr_br.contiguous().to(device),
+                                      bc.contiguous().to(device))
+        bk_bt = torch.tensor(bk_t_i, dtype=torch.long).repeat(len(connections))
+        bk_br = torch.tensor(bk_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            bk_scores = model.predict(bc.contiguous().to(device), 
+                                      bk_br.contiguous().to(device))
+            bk_scores = bk_scores[torch.arange(0, len(bc), device=device, dtype=torch.long), bk_bt]
+        else:
+            bk_scores = model.predict(bc.contiguous().to(device), 
+                                      bk_br.contiguous().to(device), 
+                                      bk_bt.contiguous().to(device))
+    elif fr_r_str[0] == "_" and bk_r_str[0] != "_":
+        # only forward hop reversed
+        fr_r_i = r2i[fr_r_str[1:]]
+        fr_t_i = valid_heads[(fr_r_i,fr_h_i)]
+        bk_r_i = r2i[bk_r_str]
+        bk_h_i = valid_heads[(bk_r_i,bk_t_i)]
+        connections = list(set(fr_t_i).intersection(set(bk_h_i)))
+        assert len(connections)
+        if len(connections) == 1: return connections[0]
+        bc = torch.tensor(connections, dtype=torch.long)
+        fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
+        fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            fr_scores = model.predict(bc.contiguous().to(device), 
+                                      fr_br.contiguous().to(device))
+            fr_scores = fr_scores[torch.arange(0, len(bc), device=device, dtype=torch.long), fr_bh]
+        else:
+            fr_scores = model.predict(bc.contiguous().to(device), 
+                                      fr_br.contiguous().to(device), 
+                                      fr_bh.contiguous().to(device))
+        bk_bt = torch.tensor(bk_t_i, dtype=torch.long).repeat(len(connections))
+        bk_br = torch.tensor(bk_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            bk_scores = model.predict(bc.contiguous().to(device), 
+                                      bk_br.contiguous().to(device))
+            bk_scores = bk_scores[torch.arange(0, len(bc), device=device, dtype=torch.long), bk_bt]
+        else:
+            bk_scores = model.predict(bc.contiguous().to(device), 
+                                      bk_br.contiguous().to(device), 
+                                      bk_bt.contiguous().to(device))
+    elif fr_r_str[0] != "_" and bk_r_str[0] == "_":
+        # only backward hop reversed
+        fr_r_i = r2i[fr_r_str]
+        fr_t_i = valid_tails[(fr_r_i,fr_h_i)]
+        bk_r_i = r2i[bk_r_str[1:]]
+        bk_h_i = valid_tails[(bk_r_i,bk_t_i)]
+        connections = list(set(fr_t_i).intersection(set(bk_h_i)))
+        assert len(connections)
+        if len(connections) == 1: return connections[0]
+        bc = torch.tensor(connections, dtype=torch.long)
+        fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
+        fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            fr_scores = model.predict(fr_bh.contiguous().to(device),
+                                      fr_br.contiguous().to(device))[0,bc]
+        else:
+            fr_scores = model.predict(fr_bh.contiguous().to(device),
+                                      fr_br.contiguous().to(device),
+                                      bc.contiguous().to(device))
+        bk_bt = torch.tensor(bk_t_i, dtype=torch.long).repeat(len(connections))
+        bk_br = torch.tensor(bk_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            bk_scores = model.predict(bk_bt.contiguous().to(device),
+                                      bk_br.contiguous().to(device))[0,bc]
+        else:
+            bk_scores = model.predict(bk_bt.contiguous().to(device),
+                                      bk_br.contiguous().to(device),
+                                      bc.contiguous().to(device))
+    else:
+        # both hops reversed
+        fr_r_i = r2i[fr_r_str[1:]]
+        fr_t_i = valid_heads[(fr_r_i,fr_h_i)]
+        bk_r_i = r2i[bk_r_str[1:]]
+        bk_h_i = valid_tails[(bk_r_i,bk_t_i)]
+        connections = list(set(fr_t_i).intersection(set(bk_h_i)))
+        assert len(connections)
+        if len(connections) == 1: return connections[0]
+        bc = torch.tensor(connections, dtype=torch.long)
+        fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
+        fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            fr_scores = model.predict(bc.contiguous().to(device), 
+                                      fr_br.contiguous().to(device))
+            fr_scores = fr_scores[torch.arange(0, len(bc), device=device, dtype=torch.long), fr_bh]
+        else:
+            fr_scores = model.predict(bc.contiguous().to(device), 
+                                      fr_br.contiguous().to(device), 
+                                      fr_bh.contiguous().to(device))
+        bk_bt = torch.tensor(bk_t_i, dtype=torch.long).repeat(len(connections))
+        bk_br = torch.tensor(bk_r_i, dtype=torch.long).repeat(len(connections))
+        if args["model"]["name"] == "tucker":
+            bk_scores = model.predict(bk_bt.contiguous().to(device),
+                                      bk_br.contiguous().to(device))[0,bc]
+        else:
+            bk_scores = model.predict(bk_bt.contiguous().to(device),
+                                      bk_br.contiguous().to(device),
+                                      bc.contiguous().to(device))
+    scores = fr_scores + bk_scores
+    if args["model"]["name"] == "tucker":
+        _, sort_idxs = torch.sort(scores, descending=True)
+        sort_idxs = sort_idxs.cpu().numpy()
+    else:
+        sort_idxs = np.argsort(scores)
+    return connections[sort_idxs[0]]
+
+
+def get_grounded_explanation(args, paths, test_num, rel, head, tail, predict, label, model, ghat, e2i, i2e, r2i, device):
+    valid_heads, valid_tails = ghat
+    gnd_paths = []
+    for path_str in paths:
+        gnd_path_fr = []
+        gnd_path_bk = []
+        path = path_str[1:-1].split("-")
+        if len(path) == 1:
+            gnd_paths.append([[head, path[0], tail]])
+        # perform forward hops
+        fr_hops = len(path)//2 if len(path) % 2 != 0 else (len(path)//2)-1
+        h = head
+        for i in range(fr_hops):
+            hop_str = path[i]
+            if hop_str[0] == "_":
+                # fr 'reverse' hop
+                r = hop_str[1:]
+                t_i = bk_hop(args, r2i[r], e2i[h], valid_heads[(r2i[r],e2i[h])], model, device)
+            else:
+                # fr hop
+                r = hop_str
+                t_i = fr_hop(args, r2i[r], e2i[h], valid_tails[(r2i[r],e2i[h])], model, device)
+            gnd_path_fr.append([h,hop_str,i2e[t_i]])
+            h = i2e[t_i]
+        # perform backward hops
+        bk_hops = len(path)//2 if len(path) % 2 == 0 else (len(path)//2)+1
+        t = tail
+        for j in range(len(path)-1, bk_hops, -1):
+            hop_str = path[j]
+            if hop_str[0] == "_":
+                # bk 'reverse' hop
+                r = hop_str[1:]
+                h_i = fr_hop(args, r2i[r], e2i[t], valid_tails[(r2i[r],e2i[t])], model, device)
+            else:
+                # bk hop
+                r = hop_str
+                h_i = bk_hop(args, r2i[r], e2i[t], valid_heads[(r2i[r],e2i[t])], model, device)
+            gnd_path_bk.insert(0, [i2e[h_i],hop_str,t])
+            t = i2e[h_i]
+        connector = path_connection(args, e2i[h], path[fr_hops], e2i[t], path[bk_hops], ghat, r2i, model, device)
+        gnd_path_fr.append([h,path[fr_hops],i2e[connector]])
+        gnd_path_bk.insert(0, [i2e[connector],path[bk_hops],t])
+        gnd_paths.append(gnd_path_fr + gnd_path_bk)
+        pdb.set_trace()
+    # starting from head, select highest rank tail by embedding in ghat going to 1 node before path end
+    # select last node by combining the forward and backward ranks
+    # store the grounded explanation
 
 
 def get_local_data1(head, tail, tr_heads, tr_tails, toggle='tail'):
@@ -430,7 +663,7 @@ def get_local_data3(head, tail, tr_heads, tr_tails, embeddings, e2i, locality, m
     return masked_example_idxs[:locality]-1
 
 
-def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, embeddings):
+def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent_embeddings, kg_embedding, ghat, device):
     exp_name = "explanations" + "_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(args["explain"]["locality_k"])
     results = pd.DataFrame(columns=["rel", "sample", "label", "predict", "train_size", "params"])
     for rel, rel_id in r2i.items():
@@ -471,9 +704,9 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, emb
                     neg_mask = tr_y == -1
                     min_examples = min(np.count_nonzero(pos_mask), np.count_nonzero(neg_mask))
                     locality = min(args["explain"]["locality_k"], min_examples)
-                    pos = get_local_data3(te_head, te_tail, tr_heads, tr_tails, embeddings, 
+                    pos = get_local_data3(te_head, te_tail, tr_heads, tr_tails, ent_embeddings, 
                                           e2i, locality, pos_mask)
-                    neg = get_local_data3(te_head, te_tail, tr_heads, tr_tails, embeddings, 
+                    neg = get_local_data3(te_head, te_tail, tr_heads, tr_tails, ent_embeddings, 
                                           e2i, locality, neg_mask)
                     examples_indices = np.append(pos, neg)
                 examples_indices = np.unique(examples_indices)
@@ -524,9 +757,10 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, emb
                     best_params = str(xmodel.get_params())
             prediction = xmodel.predict(test_x[test_idx]).item()
             if args["explain"]["xmodel"] == "logit":
-                explain_logit_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
+                paths = get_logit_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
             else:
-                explain_dt_example(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
+                paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
+            get_grounded_explanation(args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
             results = results.append({"rel": rel,
                                       "sample": test_pair,
                                       "label": te_y[test_idx],

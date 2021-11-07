@@ -69,4 +69,4 @@ explain:
   locality: "global"
   knn_k: 50
   ghat_k: 3
-  locality_k: 50
+  locality_k: 20

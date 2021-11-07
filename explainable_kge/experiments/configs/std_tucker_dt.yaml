@@ -2,7 +2,7 @@
 cuda: True
 logging:
   # Log Number (+int)
-  log_num: 1
+  log_num: 2
 # Session Mode (TRAIN,TEST)
 sess_mode: TRAIN
 dataset:
@@ -66,8 +66,8 @@ continual:
   enable_offline: False
 explain:
   xmodel: "decision_tree"
-  locality: "local3"
+  locality: "global"
   knn_k: 50
   ghat_k: 3
-  locality_k: 50
+  locality_k: 20
   save_tree: False
