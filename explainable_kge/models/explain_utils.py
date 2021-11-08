@@ -133,22 +133,37 @@ def generate_ghat(args, knn, dataset, model, thresholds, device, ghat_path=None,
 
 def process_ghat(ghat, e2i, r2i):
     # convert ghat into usable lookup table
-    valid_tails = {}
-    valid_heads = {}
+    valid_heads_rt = {}
+    valid_heads_r = {}
+    valid_tails_rh = {}
+    valid_tails_r = {}
     for i in range(ghat.shape[0]):
         h, r, t = ghat[i,:]
         h_i = e2i[h]
         r_i = r2i[r]
         t_i = e2i[t]
-        if (r_i,t_i) not in valid_heads:
-            valid_heads[(r_i,t_i)] = [h_i]
-        elif h_i not in valid_heads[(r_i,t_i)]:
-            valid_heads[(r_i,t_i)].append(h_i)
-        if (r_i,h_i) not in valid_tails:
-            valid_tails[(r_i,h_i)] = [t_i]
-        elif t_i not in valid_tails[(r_i,h_i)]:
-            valid_tails[(r_i,h_i)].append(t_i)
-    return valid_heads, valid_tails
+
+        if (r_i,t_i) not in valid_heads_rt:
+            valid_heads_rt[(r_i,t_i)] = [h_i]
+        elif h_i not in valid_heads_rt[(r_i,t_i)]:
+            valid_heads_rt[(r_i,t_i)].append(h_i)
+
+        if r_i not in valid_heads_r:
+            valid_heads_r[r_i] = [h_i]
+        elif h_i not in valid_heads_r[r_i]:
+            valid_heads_r[r_i].append(h_i)
+
+        if (r_i,h_i) not in valid_tails_rh:
+            valid_tails_rh[(r_i,h_i)] = [t_i]
+        elif t_i not in valid_tails_rh[(r_i,h_i)]:
+            valid_tails_rh[(r_i,h_i)].append(t_i)
+
+        if r_i not in valid_tails_r:
+            valid_tails_r[r_i] = [t_i]
+        elif t_i not in valid_tails_r[r_i]:
+            valid_tails_r[r_i].append(t_i)
+
+    return valid_heads_rt, valid_heads_r, valid_tails_rh, valid_tails_r
     
 
 def load_datasets_to_dataframes(args):
@@ -411,23 +426,49 @@ def get_dt_explain_paths(ex_fp, rel, example_num, example, model, feat_names, he
     return np.asarray(paths, dtype=str)
 
 
-def fr_hop(args, r_i, h_i, t_i, model, device):
+def fr_hop(args, r_i, h_i, ghat, next_r, r2i, dflag, model, device):
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tails_r = ghat
+    # get tails that are compatible with next relation
+    t_i = valid_tails_rt[(r_i,h_i)]
+    if dflag == "fr":
+        if next_r[0] == "_":
+            t_i_valid = valid_tails_r[r2i[next_r[1:]]]
+        else:
+            t_i_valid = valid_heads_r[r2i[next_r]]
+    else:
+        if next_r[0] == "_":
+            t_i_valid = valid_heads_r[r2i[next_r[1:]]]
+        else:
+            t_i_valid = valid_tails_r[r2i[next_r]]
+    t_i = list(set(t_i).intersection(set(t_i_valid)))
+    assert len(t_i)
     # given head and relation, return most likely tail
     if len(t_i) == 1: return t_i[0]
     bh = torch.tensor(h_i, dtype=torch.long).repeat(len(t_i))
     br = torch.tensor(r_i, dtype=torch.long).repeat(len(t_i))
     bt = torch.tensor(t_i, dtype=torch.long)
     if args["model"]["name"] == "tucker":
-        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))[0,bt]
-        _, sort_idxs = torch.sort(scores, descending=True)
-        sort_idxs = sort_idxs.cpu().numpy()
+        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))[0,bt].cpu().numpy()
     else:
         scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
-        sort_idxs = np.argsort(scores)
-    return t_i[sort_idxs[0]]
+    return t_i, scores
 
 
-def bk_hop(args, r_i, t_i, h_i, model, device):
+def bk_hop(args, r_i, t_i, ghat, next_r, r2i, dflag, model, device):
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tails_r = ghat
+    h_i = valid_heads_rh[(r_i,t_i)]
+    if dflag == "fr":
+        if next_r[0] == "_":
+            h_i_valid = valid_tails_r[r2i[next_r[1:]]]
+        else:
+            h_i_valid = valid_heads_r[r2i[next_r]]
+    else:
+        if next_r[0] == "_":
+            h_i_valid = valid_heads_r[r2i[next_r[1:]]]
+        else:
+            h_i_valid = valid_tails_r[r2i[next_r]]
+    h_i = list(set(h_i).intersection(set(h_i_valid)))
+    assert len(h_i)
     # given tail and relation, return most likely head
     if len(h_i) == 1: return h_i[0]
     bh = torch.tensor(h_i, dtype=torch.long)
@@ -435,25 +476,22 @@ def bk_hop(args, r_i, t_i, h_i, model, device):
     bt = torch.tensor(t_i, dtype=torch.long).repeat(len(bh))
     if args["model"]["name"] == "tucker":
         scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-        scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-        _, sort_idxs = torch.sort(scores, descending=True)
-        sort_idxs = sort_idxs.cpu().numpy()
+        scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt].cpu().numpy()
     else:
         scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
-        sort_idxs = np.argsort(scores)
-    return h_i[sort_idxs[0]]
+    return h_i, scores
 
 
-def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, model, device):
-    valid_heads, valid_tails = ghat
+def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, model, device):
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tail_r = ghat
     if fr_r_str[0] != "_" and bk_r_str[0] != "_":
         # neither hop is reversed
         fr_r_i = r2i[fr_r_str]
-        fr_t_i = valid_tails[(fr_r_i,fr_h_i)]
+        fr_t_i = valid_tails_rt[(fr_r_i,fr_h_i)]
         bk_r_i = r2i[bk_r_str]
-        bk_h_i = valid_heads[(bk_r_i,bk_t_i)]
+        bk_h_i = valid_heads_rh[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        assert len(connections)
+        if not len(connections): return "fr bk failed"
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -478,11 +516,11 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, model, 
     elif fr_r_str[0] == "_" and bk_r_str[0] != "_":
         # only forward hop reversed
         fr_r_i = r2i[fr_r_str[1:]]
-        fr_t_i = valid_heads[(fr_r_i,fr_h_i)]
+        fr_t_i = valid_heads_rh[(fr_r_i,fr_h_i)]
         bk_r_i = r2i[bk_r_str]
-        bk_h_i = valid_heads[(bk_r_i,bk_t_i)]
+        bk_h_i = valid_heads_rh[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        assert len(connections)
+        if not len(connections): return "rev fr bk failed"
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -508,11 +546,11 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, model, 
     elif fr_r_str[0] != "_" and bk_r_str[0] == "_":
         # only backward hop reversed
         fr_r_i = r2i[fr_r_str]
-        fr_t_i = valid_tails[(fr_r_i,fr_h_i)]
+        fr_t_i = valid_tails_rt[(fr_r_i,fr_h_i)]
         bk_r_i = r2i[bk_r_str[1:]]
-        bk_h_i = valid_tails[(bk_r_i,bk_t_i)]
+        bk_h_i = valid_tails_rt[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        assert len(connections)
+        if not len(connections): return "fr rev bk failed"
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -536,11 +574,11 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, model, 
     else:
         # both hops reversed
         fr_r_i = r2i[fr_r_str[1:]]
-        fr_t_i = valid_heads[(fr_r_i,fr_h_i)]
+        fr_t_i = valid_heads_rh[(fr_r_i,fr_h_i)]
         bk_r_i = r2i[bk_r_str[1:]]
-        bk_h_i = valid_tails[(bk_r_i,bk_t_i)]
+        bk_h_i = valid_tails_rt[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        assert len(connections)
+        if not len(connections): return "rev fr rev bk failed"
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -572,7 +610,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, model, 
 
 
 def get_grounded_explanation(args, paths, test_num, rel, head, tail, predict, label, model, ghat, e2i, i2e, r2i, device):
-    valid_heads, valid_tails = ghat
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tail_r = ghat
     gnd_paths = []
     for path_str in paths:
         gnd_path_fr = []
@@ -588,11 +626,11 @@ def get_grounded_explanation(args, paths, test_num, rel, head, tail, predict, la
             if hop_str[0] == "_":
                 # fr 'reverse' hop
                 r = hop_str[1:]
-                t_i = bk_hop(args, r2i[r], e2i[h], valid_heads[(r2i[r],e2i[h])], model, device)
+                t_i, scores = bk_hop(args, r2i[r], e2i[h], ghat, path[i+1], r2i, "fr", model, device)
             else:
                 # fr hop
                 r = hop_str
-                t_i = fr_hop(args, r2i[r], e2i[h], valid_tails[(r2i[r],e2i[h])], model, device)
+                t_i, scores = fr_hop(args, r2i[r], e2i[h], ghat, path[i+1], r2i, "fr", model, device)
             gnd_path_fr.append([h,hop_str,i2e[t_i]])
             h = i2e[t_i]
         # perform backward hops
@@ -603,18 +641,24 @@ def get_grounded_explanation(args, paths, test_num, rel, head, tail, predict, la
             if hop_str[0] == "_":
                 # bk 'reverse' hop
                 r = hop_str[1:]
-                h_i = fr_hop(args, r2i[r], e2i[t], valid_tails[(r2i[r],e2i[t])], model, device)
+                h_i = fr_hop(args, r2i[r], e2i[t], ghat, path[j-1], r2i, "bk", model, device)
             else:
                 # bk hop
                 r = hop_str
-                h_i = bk_hop(args, r2i[r], e2i[t], valid_heads[(r2i[r],e2i[t])], model, device)
+                h_i = bk_hop(args, r2i[r], e2i[t], ghat, path[j-1], r2i, "bk", model, device)
             gnd_path_bk.insert(0, [i2e[h_i],hop_str,t])
             t = i2e[h_i]
-        connector = path_connection(args, e2i[h], path[fr_hops], e2i[t], path[bk_hops], ghat, r2i, model, device)
-        gnd_path_fr.append([h,path[fr_hops],i2e[connector]])
-        gnd_path_bk.insert(0, [i2e[connector],path[bk_hops],t])
-        gnd_paths.append(gnd_path_fr + gnd_path_bk)
-        pdb.set_trace()
+        connector = path_connection(args, e2i[h], path[fr_hops], e2i[t], path[bk_hops], ghat, r2i, i2e, model, device)
+        if type(connector) == str:
+            logout(connector,"w")
+            logout(path,"d")
+            logout(gnd_path_fr,"d")
+            logout(gnd_path_bk,"d")
+            pdb.set_trace()
+        else:
+            gnd_path_fr.append([h,path[fr_hops],i2e[connector]])
+            gnd_path_bk.insert(0, [i2e[connector],path[bk_hops],t])
+            gnd_paths.append(gnd_path_fr + gnd_path_bk)
     # starting from head, select highest rank tail by embedding in ghat going to 1 node before path end
     # select last node by combining the forward and backward ranks
     # store the grounded explanation
