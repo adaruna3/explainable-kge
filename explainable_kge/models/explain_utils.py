@@ -422,7 +422,7 @@ def get_dt_explain_paths(ex_fp, rel, example_num, example, model, feat_names, he
             paths.append(feat_names[feat_idx])
         else:
             explanation_df = explanation_df.append({"rule": "Path {} missing".format(path)}, ignore_index=True)
-    explanation_df.to_csv(os.path.join(ex_fp, rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + '.tsv'), sep='\t')
+    explanation_df.to_csv(os.path.join(ex_fp, file_name + '.tsv'), sep='\t')
     return np.asarray(paths, dtype=str)
 
 
@@ -443,12 +443,11 @@ def fr_hop(args, r_i, h_i, ghat, next_r, r2i, dflag, model, device):
     t_i = list(set(t_i).intersection(set(t_i_valid)))
     assert len(t_i)
     # given head and relation, return most likely tail
-    if len(t_i) == 1: return t_i[0]
     bh = torch.tensor(h_i, dtype=torch.long).repeat(len(t_i))
     br = torch.tensor(r_i, dtype=torch.long).repeat(len(t_i))
     bt = torch.tensor(t_i, dtype=torch.long)
     if args["model"]["name"] == "tucker":
-        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))[0,bt].cpu().numpy()
+        scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))[0,bt].cpu().detach().numpy()
     else:
         scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
     return t_i, scores
@@ -470,16 +469,112 @@ def bk_hop(args, r_i, t_i, ghat, next_r, r2i, dflag, model, device):
     h_i = list(set(h_i).intersection(set(h_i_valid)))
     assert len(h_i)
     # given tail and relation, return most likely head
-    if len(h_i) == 1: return h_i[0]
     bh = torch.tensor(h_i, dtype=torch.long)
     br = torch.tensor(r_i, dtype=torch.long).repeat(len(bh))
     bt = torch.tensor(t_i, dtype=torch.long).repeat(len(bh))
     if args["model"]["name"] == "tucker":
         scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-        scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt].cpu().numpy()
+        scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt].cpu().detach().numpy()
     else:
         scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device))
     return h_i, scores
+
+
+def forward_path_search(args, path, head, ghat, e2i, i2e, r2i, model, device):
+    # get tails for current path step
+    hop_str = path[0]
+    if hop_str[0] == "_":
+        # fr 'reverse' hop
+        r = hop_str[1:]
+        t_i_s, scores = bk_hop(args, r2i[r], e2i[head], ghat, path[1], r2i, "fr", model, device)
+    else:
+        # fr hop
+        r = hop_str
+        t_i_s, scores = fr_hop(args, r2i[r], e2i[head], ghat, path[1], r2i, "fr", model, device)
+    # if path size is two, return the tail paths for head with scores
+    if len(path) == 2:
+        return [[[head,hop_str,i2e[t_i]]] for t_i in t_i_s], scores
+    # if path greater than two, recursively get rest of path and merge with current
+    gnd_paths_fr = []
+    gnd_scores = []
+    for t_i_idx in range(len(t_i_s)):
+        t_i = t_i_s[t_i_idx]
+        gnd_paths, scores2 = forward_path_search(args, path[1:], i2e[t_i], ghat, e2i, i2e, r2i, model, device)
+        for gnd_idx in range(len(gnd_paths)):
+            gnd_paths_fr.append(gnd_paths[gnd_idx].insert(0, [head,hop_str,i2e[t_i]]))
+            gnd_scores.append(scores[t_i_idx] + scores2[gnd_idx])
+    return gnd_paths_fr, gnd_scores
+
+
+def backward_path_search(args, path, tail, ghat, e2i, i2e, r2i, model, device):
+    hop_str = path[-1]
+    if hop_str[0] == "_":
+        # bk 'reverse' hop
+        r = hop_str[1:]
+        h_i_s, scores = fr_hop(args, r2i[r], e2i[tail], ghat, path[-2], r2i, "bk", model, device)
+    else:
+        # bk hop
+        r = hop_str
+        h_i_s, scores = bk_hop(args, r2i[r], e2i[tail], ghat, path[-2], r2i, "bk", model, device)
+    # if path size is two, return the tail paths for head with scores
+    if len(path) == 2:
+        return [[[i2e[h_i],hop_str,tail]] for h_i in h_i_s], scores
+    # if path greater than two, recursively get rest of path and merge with current
+    gnd_paths_bk = []
+    gnd_scores = []
+    for h_i_idx in range(len(h_i_s)):
+        h_i = h_i_s[h_i_idx]
+        gnd_paths, scores2 = backward_path_search(args, path[:-1], i2e[h_i], ghat, e2i, i2e, r2i, model, device)
+        for gnd_idx in range(len(gnd_paths)):
+            gnd_paths_bk.append(gnd_paths[gnd_idx].append([i2e[h_i],hop_str,tail]))
+            gnd_scores.append(scores[h_i_idx] + scores2[gnd_idx])
+    return gnd_paths_bk, gnd_scores
+
+
+def order_possible_paths(scores1, scores2):
+    score_tbl = {}
+    scores = []
+    if scores1.shape[0] and scores2.shape[0]:
+        for i in range(len(scores1)):
+            for j in range(len(scores2)):
+                score_tbl[len(scores)] = (i, j)
+                scores.append(scores1[i] + scores2[j])
+        sort_idxs = np.argsort(scores)
+        ids1 = []
+        ids2 = []
+        for idx in range(len(sort_idxs)):
+            id1, id2 = score_tbl[sort_idxs[idx]]
+            ids1.append(id1)
+            ids2.append(id2)
+    elif scores1.shape[0] and not scores2.shape[0]:
+        for i in range(len(scores1)):
+            score_tbl[len(scores)] = (i, None)
+            scores.append(scores1[i])
+        sort_idxs = np.argsort(scores)
+        ids1 = []
+        ids2 = []
+        for idx in range(len(sort_idxs)):
+            id1, id2 = score_tbl[sort_idxs[idx]]
+            ids1.append(id1)
+            ids2.append(id2)
+    elif not scores1.shape[0] and not scores2.shape[0]:
+        ids1 = [None]
+        ids2 = [None]
+    else:
+        pdb.set_trace()
+    return ids1, ids2
+
+
+def get_connection_ends(h, fr_path, fr_idx, t, bk_path, bk_idx):
+    if fr_idx is None:
+        fr_h = h
+    else:
+        fr_h = fr_path[fr_idx][-1][-1]
+    if bk_idx is None:
+        bk_t = t
+    else:
+        bk_t = bk_path[bk_idx][0][0]
+    return fr_h, bk_t
 
 
 def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, model, device):
@@ -491,7 +586,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_r_i = r2i[bk_r_str]
         bk_h_i = valid_heads_rh[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        if not len(connections): return "fr bk failed"
+        if not len(connections): return False
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -520,7 +615,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_r_i = r2i[bk_r_str]
         bk_h_i = valid_heads_rh[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        if not len(connections): return "rev fr bk failed"
+        if not len(connections): return False
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -550,7 +645,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_r_i = r2i[bk_r_str[1:]]
         bk_h_i = valid_tails_rt[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        if not len(connections): return "fr rev bk failed"
+        if not len(connections): return False
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -578,7 +673,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_r_i = r2i[bk_r_str[1:]]
         bk_h_i = valid_tails_rt[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
-        if not len(connections): return "rev fr rev bk failed"
+        if not len(connections): return False
         if len(connections) == 1: return connections[0]
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
@@ -609,59 +704,72 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
     return connections[sort_idxs[0]]
 
 
-def get_grounded_explanation(args, paths, test_num, rel, head, tail, predict, label, model, ghat, e2i, i2e, r2i, device):
-    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tail_r = ghat
+def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
+    if not os.path.exists(ex_fp):
+        os.makedirs(ex_fp)
+    file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + "_gnd"
     gnd_paths = []
     for path_str in paths:
-        gnd_path_fr = []
-        gnd_path_bk = []
+        gnd_paths_fr = []
+        gnd_paths_fr_scores = np.asarray([])
+        gnd_paths_bk = []
+        gnd_paths_bk_scores = np.asarray([])
         path = path_str[1:-1].split("-")
         if len(path) == 1:
             gnd_paths.append([[head, path[0], tail]])
-        # perform forward hops
+            continue
         fr_hops = len(path)//2 if len(path) % 2 != 0 else (len(path)//2)-1
-        h = head
-        for i in range(fr_hops):
-            hop_str = path[i]
-            if hop_str[0] == "_":
-                # fr 'reverse' hop
-                r = hop_str[1:]
-                t_i, scores = bk_hop(args, r2i[r], e2i[h], ghat, path[i+1], r2i, "fr", model, device)
-            else:
-                # fr hop
-                r = hop_str
-                t_i, scores = fr_hop(args, r2i[r], e2i[h], ghat, path[i+1], r2i, "fr", model, device)
-            gnd_path_fr.append([h,hop_str,i2e[t_i]])
-            h = i2e[t_i]
-        # perform backward hops
         bk_hops = len(path)//2 if len(path) % 2 == 0 else (len(path)//2)+1
-        t = tail
-        for j in range(len(path)-1, bk_hops, -1):
-            hop_str = path[j]
-            if hop_str[0] == "_":
-                # bk 'reverse' hop
-                r = hop_str[1:]
-                h_i = fr_hop(args, r2i[r], e2i[t], ghat, path[j-1], r2i, "bk", model, device)
-            else:
-                # bk hop
-                r = hop_str
-                h_i = bk_hop(args, r2i[r], e2i[t], ghat, path[j-1], r2i, "bk", model, device)
-            gnd_path_bk.insert(0, [i2e[h_i],hop_str,t])
-            t = i2e[h_i]
-        connector = path_connection(args, e2i[h], path[fr_hops], e2i[t], path[bk_hops], ghat, r2i, i2e, model, device)
-        if type(connector) == str:
-            logout(connector,"w")
-            logout(path,"d")
-            logout(gnd_path_fr,"d")
-            logout(gnd_path_bk,"d")
+        if len(path) > 2:
+            # perform forward hops
+            gnd_paths_fr, gnd_paths_fr_scores = forward_path_search(args,
+                                                                    path[:fr_hops+1],
+                                                                    head, ghat,
+                                                                    e2i, i2e, r2i,
+                                                                    model, device)
+            # perform backward hops
+            if len(path) > 3:
+                gnd_paths_bk, gnd_paths_bk_scores = backward_path_search(args,
+                                                                         path[bk_hops:],
+                                                                         tail, ghat,
+                                                                         e2i, i2e, r2i,
+                                                                         model, device)
+        fr_id, bk_id = order_possible_paths(gnd_paths_fr_scores, gnd_paths_bk_scores)
+        pair_idx = -1
+        # attempts to form complete grounded explanation path
+        joint_ent = False
+        while not joint_ent and pair_idx < len(fr_id)-1:
+            pair_idx += 1
+            lh, rt = get_connection_ends(head, gnd_paths_fr, fr_id[pair_idx], tail, gnd_paths_bk, bk_id[pair_idx])
+            joint_ent = path_connection(args, e2i[lh], path[fr_hops], e2i[rt], path[bk_hops], ghat, r2i, i2e, model, device)
+        if not joint_ent:
+            logout("Failed to find grounded explanation for {} and {} following: {}".format(head, tail, str(path)),"w")
+            gnd_paths.append("Failed to find grounded explanation for {} and {} following: {}".format(head, tail, str(path)))
             pdb.set_trace()
         else:
-            gnd_path_fr.append([h,path[fr_hops],i2e[connector]])
-            gnd_path_bk.insert(0, [i2e[connector],path[bk_hops],t])
-            gnd_paths.append(gnd_path_fr + gnd_path_bk)
-    # starting from head, select highest rank tail by embedding in ghat going to 1 node before path end
-    # select last node by combining the forward and backward ranks
+            connection = [[lh,path[fr_hops],i2e[joint_ent]],[i2e[joint_ent],path[bk_hops],rt]]
+            if fr_id[pair_idx] is None:
+                gnd_path_fr = []
+            else:
+                gnd_path_fr = gnd_paths_fr[fr_id[pair_idx]]
+            if bk_id[pair_idx] is None:
+                gnd_path_bk = []
+            else:
+                gnd_path_bk = gnd_paths_bk[bk_id[pair_idx]]
+            gnd_paths.append(gnd_path_fr + connection + gnd_path_bk)
     # store the grounded explanation
+    explanation_df = pd.DataFrame(columns=["explanation","head","tail","y_logit","y_hat"])
+    explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
+    for path in gnd_paths:
+        if type(path) == str:
+            path_str = path
+        else:
+            path_str = []
+            for triple in path:
+                path_str.append(",".join(triple))
+            path_str = ";".join(path_str)
+        explanation_df = explanation_df.append({"explanation": path_str}, ignore_index=True)
+    explanation_df.to_csv(os.path.join(ex_fp, file_name + '.tsv'), sep='\t')
 
 
 def get_local_data1(head, tail, tr_heads, tr_tails, toggle='tail'):
@@ -713,6 +821,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
     for rel, rel_id in r2i.items():
     #     a. Load the extracted SFE features/labels
         print("Working on " + str(rel))
+        pdb.set_trace()
         train_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "train.tsv")
         valid_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "valid.tsv")
         test_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "test.tsv")
@@ -804,7 +913,8 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                 paths = get_logit_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
             else:
                 paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
-            get_grounded_explanation(args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
+            if args["explain"]["ground_explanations"]:
+                get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
             results = results.append({"rel": rel,
                                       "sample": test_pair,
                                       "label": te_y[test_idx],

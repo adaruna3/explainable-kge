@@ -71,3 +71,4 @@ explain:
   ghat_k: 3
   locality_k: 20
   save_tree: False
+  ground_explanations: True
