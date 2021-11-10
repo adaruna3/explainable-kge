@@ -31,7 +31,6 @@ it and run `sbt test` inside the `pra` submodule.
 ## ToDos
 I. Locality results
     d. get BEST results for DT local
-II. Get GROUNDED explanations for each prediction
-    a. 
+II. Grounded explanations - needs type constrained ent selection
 III. Add methods to corrupt the dataset
 IV. Check explanations coming out of corrupted dataset

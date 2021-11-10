@@ -745,7 +745,6 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
         if not joint_ent:
             logout("Failed to find grounded explanation for {} and {} following: {}".format(head, tail, str(path)),"w")
             gnd_paths.append("Failed to find grounded explanation for {} and {} following: {}".format(head, tail, str(path)))
-            pdb.set_trace()
         else:
             connection = [[lh,path[fr_hops],i2e[joint_ent]],[i2e[joint_ent],path[bk_hops],rt]]
             if fr_id[pair_idx] is None:
@@ -821,7 +820,6 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
     for rel, rel_id in r2i.items():
     #     a. Load the extracted SFE features/labels
         print("Working on " + str(rel))
-        pdb.set_trace()
         train_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "train.tsv")
         valid_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "valid.tsv")
         test_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "test.tsv")
