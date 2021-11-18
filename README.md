@@ -29,8 +29,11 @@ it and run `sbt test` inside the `pra` submodule.
 
 
 ## ToDos
-I. Locality results
-    d. get BEST results for DT local
-II. Grounded explanations - needs type constrained ent selection
-III. Add methods to corrupt the dataset
-IV. Check explanations coming out of corrupted dataset
+I. Post-process explanation outputs
+    c. Final grammar fixes
+II. User-study Design
+    b. Design the survey UI with data output
+    c. Test with Devleena and others
+    d. Put live
+III. Improve methods to corrupt the dataset
+IV. Try to get feedback and retrain KGE

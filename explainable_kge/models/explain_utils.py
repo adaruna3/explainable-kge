@@ -4,6 +4,7 @@ import subprocess
 from copy import copy
 import itertools
 import pickle
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -163,7 +164,37 @@ def process_ghat(ghat, e2i, r2i):
         elif t_i not in valid_tails_r[r_i]:
             valid_tails_r[r_i].append(t_i)
 
-    return valid_heads_rt, valid_heads_r, valid_tails_rh, valid_tails_r
+    # also load corrupt domains
+    rel_heads = {}
+    rel_tails = {}
+    for row_id in range(ghat.shape[0]):
+        h, r, t = ghat[row_id, :]
+        rel_heads[r] = []
+        rel_tails[r] = []
+
+    for row_id in range(ghat.shape[0]):
+        h, r, t = ghat[row_id,:]
+        if h not in rel_heads[r]:
+            rel_heads[r].append(h)
+        if t not in rel_tails[r]:
+            rel_tails[r].append(t)
+    # assign the full domains
+    h_dom = {}
+    t_dom = {}
+    for r in rel_heads.keys():
+        for t in rel_tails[r]:
+            h_dom[(r,t)] = copy(rel_heads[r])
+        for h in rel_heads[r]:
+            t_dom[(r,h)] = copy(rel_tails[r])
+    # remove all head/tails from relation domain in triples
+    for row_id in range(ghat.shape[0]):
+        h, r, t = ghat[row_id,:]
+        if t in t_dom[(r,h)]:
+            del t_dom[(r,h)][t_dom[(r,h)].index(t)]
+        if h in h_dom[(r,t)]:
+            del h_dom[(r,t)][h_dom[(r,t)].index(h)]
+
+    return valid_heads_rt, valid_heads_r, valid_tails_rh, valid_tails_r, h_dom, t_dom
     
 
 def load_datasets_to_dataframes(args):
@@ -427,7 +458,7 @@ def get_dt_explain_paths(ex_fp, rel, example_num, example, model, feat_names, he
 
 
 def fr_hop(args, r_i, h_i, ghat, next_r, r2i, dflag, model, device):
-    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tails_r = ghat
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tails_r, _, _ = ghat
     # get tails that are compatible with next relation
     t_i = valid_tails_rt[(r_i,h_i)]
     if dflag == "fr":
@@ -454,7 +485,7 @@ def fr_hop(args, r_i, h_i, ghat, next_r, r2i, dflag, model, device):
 
 
 def bk_hop(args, r_i, t_i, ghat, next_r, r2i, dflag, model, device):
-    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tails_r = ghat
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tails_r, _, _ = ghat
     h_i = valid_heads_rh[(r_i,t_i)]
     if dflag == "fr":
         if next_r[0] == "_":
@@ -578,7 +609,7 @@ def get_connection_ends(h, fr_path, fr_idx, t, bk_path, bk_idx):
 
 
 def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, model, device):
-    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tail_r = ghat
+    valid_heads_rh, valid_heads_r, valid_tails_rt, valid_tail_r, _, _ = ghat
     if fr_r_str[0] != "_" and bk_r_str[0] != "_":
         # neither hop is reversed
         fr_r_i = r2i[fr_r_str]
@@ -705,6 +736,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
 
 
 def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
+    _, _, _, _, h_dom, t_dom = ghat
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + "_gnd"
@@ -759,16 +791,122 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
     # store the grounded explanation
     explanation_df = pd.DataFrame(columns=["explanation","head","tail","y_logit","y_hat"])
     explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
+    exp_json = []
     for path in gnd_paths:
         if type(path) == str:
             path_str = path
         else:
-            path_str = []
-            for triple in path:
-                path_str.append(",".join(triple))
-            path_str = ";".join(path_str)
+            short_path = remove_redundancies(path)
+            path_str, fmt_path = format_path(short_path)
+            exp = {
+                "triple": format_ent(head) + format_relation(rel) + format_ent(tail),
+                "y_bb": str(label),
+                "y_xm": str(pred),
+                "str": path_str,
+                "parts": []
+            }
+            for i in range(len(short_path)):
+                h, r, t = short_path[i]
+                part = {}
+                part["idx"] = str(i)
+                part["str"] = ",".join(fmt_path[i])
+                if r[0] == "_":
+                    heads = np.random.choice(t_dom[(r[1:],t)], size=min(3,len(t_dom[(r[1:],t)])), replace=False).tolist()
+                    tails = np.random.choice(h_dom[(r[1:],h)], size=min(3,len(h_dom[(r[1:],h)])), replace=False).tolist()
+                else:
+                    heads = np.random.choice(t_dom[(r,h)], size=min(3,len(t_dom[(r,h)])), replace=False).tolist()
+                    tails = np.random.choice(h_dom[(r,t)], size=min(3,len(h_dom[(r,t)])), replace=False).tolist()
+                part["heads"] = [format_ent(hh) for hh in heads]
+                part["tails"] = [format_ent(tt) for tt in tails]
+                exp["parts"].append(part)
+            exp_json.append(exp)
         explanation_df = explanation_df.append({"explanation": path_str}, ignore_index=True)
     explanation_df.to_csv(os.path.join(ex_fp, file_name + '.tsv'), sep='\t')
+    return exp_json
+
+
+def remove_redundancies(path):
+    # remove redundant parts of paths
+    i = 0
+    while i < len(path):
+        h_i, r_i, t_i = path[i]
+        j = i
+        redundancy = False
+        while j < len(path):
+            h_j, r_j, t_j = path[j]
+            if h_i == t_j:
+                redundancy = True
+                break
+            else:
+                j += 1
+        if redundancy:
+            if i == j:
+                del path[i]
+            else:
+                del path[i:j+1]
+        else:
+            i += 1
+    return path
+
+
+def format_path(path):
+    # format the triple to a template
+    fmt_path = []
+    path_str = ""
+    for triple_idx in range(len(path)):
+        triple = path[triple_idx]
+        h, r, t = triple
+        h_str = format_ent(h)
+        r_str = format_relation(r)
+        t_str = format_ent(t)
+
+        fmt_path.append([h_str, r_str[1:-1], t_str])
+
+        if triple_idx == 0:
+            path_str += h_str + r_str + t_str
+        elif triple_idx < len(path)-1:
+            path_str += ", " + h_str + r_str + t_str
+        else:
+            path_str += ", and " + h_str + r_str + t_str
+    return path_str, fmt_path
+
+
+def format_relation(rel):
+    format_rel = {
+        "HasEffect": " results in ",
+        "InverseActionOf": " is the opposite action of ",
+        "InverseStateOf": " is the opposite state of ",
+        "LocInRoom": " is often in ",
+        "ObjCanBe": " can have  performed on it",
+        "ObjInLoc": " is often in ",
+        "ObjInRoom": " is often in ",
+        "ObjOnLoc": " is often on ",
+        "ObjUsedTo": " is used to perform ",
+        "ObjhasState": " has a possible state of ",
+        "OperatesOn": " operates on ",
+        "_HasEffect": " is caused by ",
+        "_InverseActionOf": " is the opposite action of ",
+        "_InverseStateOf": " is the opposite state of ",
+        "_LocInRoom": " often can contain ",
+        "_ObjCanBe": " can be performed on ",
+        "_ObjInLoc": " often can contain ",
+        "_ObjInRoom": " often can contain ",
+        "_ObjOnLoc": " often can contain ",
+        "_ObjUsedTo": " can be done with ",
+        "_ObjhasState": " is a possible state of ",
+        "_OperatesOn": " can be operated on by ",
+    }
+    return format_rel[rel]
+    
+
+def format_ent(ent):
+    if ent[-1] == "a":
+        ent_str = "the {} action".format(ent[:-2])
+    elif ent[-1] == "s":
+        ent_str = "the {} state".format(ent[:-2])
+    else:
+        ent_str = "a {}".format(ent[:-2])
+    return ent_str
 
 
 def get_local_data1(head, tail, tr_heads, tr_tails, toggle='tail'):
@@ -817,6 +955,8 @@ def get_local_data3(head, tail, tr_heads, tr_tails, embeddings, e2i, locality, m
 def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent_embeddings, kg_embedding, ghat, device):
     exp_name = "explanations" + "_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(args["explain"]["locality_k"])
     results = pd.DataFrame(columns=["rel", "sample", "label", "predict", "train_size", "params"])
+    if args["explain"]["ground_explanations"]:
+        exp_json = []
     for rel, rel_id in r2i.items():
     #     a. Load the extracted SFE features/labels
         print("Working on " + str(rel))
@@ -912,7 +1052,8 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
             else:
                 paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
             if args["explain"]["ground_explanations"]:
-                get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
+                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
+                exp_json += exp
             results = results.append({"rel": rel,
                                       "sample": test_pair,
                                       "label": te_y[test_idx],
@@ -921,6 +1062,11 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                                       "params": best_params}, ignore_index=True)
             if args["explain"]["locality"] == "global":
                 fit_model = False
+    if args["explain"]["ground_explanations"]:
+        json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(args["explain"]["locality_k"])
+        json_fp = os.path.join(sfe_fp, json_name + '.json')
+        with open(json_fp, "w") as f:
+            json.dump(exp_json, f)
     with open(results_fp, "wb") as f:
         pickle.dump(results, f)
     logout("Finished getting xmodel results", "s")

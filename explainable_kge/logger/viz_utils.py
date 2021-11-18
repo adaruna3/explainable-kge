@@ -501,6 +501,7 @@ def format_names(methods):
     method_names = []
     method2name = {
         "logit": "Logistic Classification",
+        "decision_tree": "Decision Tree Classification",
         "HasEffect": "(Action) Has Effect (State)",
         "InverseActionOf": "(Action) Inverse Action Of (Action)",
         "InverseStateOf": "(State) Inverse State Of (State)",
@@ -522,6 +523,7 @@ def format_colors(methods):
     method_colors = []
     method2color = {
         "logit": "m",
+        "decision_tree": "b",
         "HasEffect": "b",
         "InverseActionOf": "m",
         "InverseStateOf": "c",
@@ -543,6 +545,7 @@ def format_linestyles(methods):
     method_markers = []
     method2marker = {
         "logit": "solid",
+        "decision_tree": "solid",
         "HasEffect": "solid",
         "InverseActionOf": "solid",
         "InverseStateOf": "solid",
@@ -564,6 +567,7 @@ def format_hatches(methods):
     method_markers = []
     method2marker = {
         "logit": "//",
+        "decision_tree": "//",
         "HasEffect": "//",
         "InverseActionOf": "//",
         "InverseStateOf": "//",
@@ -660,7 +664,7 @@ def plot_params(results):
     return [l1_fig, alpha_fig, losses_fig]
 
 
-def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000,1500,2000,2500]):
+def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000]): #,1500,2000,2500]):
     root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
     # load all the data
     summarys = pd.DataFrame(columns=["log_num","k","Relation","Coverage","Fidelity","F1-Fidelity", "Weight"])
@@ -730,7 +734,7 @@ def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,
         plots.append(lp)
     return plots
 
-def best_locality(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000,1500,2000,2500]):
+def best_locality(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000]):#,1500,2000,2500]):
     root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
     # load all the data
     summarys = pd.DataFrame(columns=["log_num","k","Relation","Coverage","Fidelity","F1-Fidelity", "Weight"])
