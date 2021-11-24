@@ -735,8 +735,116 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
     return connections[sort_idxs[0]]
 
 
-def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
+def get_path_corrupt_parts(short_path):
+    if len(short_path) > 2:
+        num_corrupt_parts = np.random.randint(1,3)
+    else:
+        num_corrupt_parts = 1
+    possible_corrupt_parts = [i for i in range(len(short_path) + 1)]
+    corrupt_parts = []
+    while len(corrupt_parts) < num_corrupt_parts:
+        corrupt_parts.append(np.random.choice(possible_corrupt_parts))
+        possible_corrupt_parts.pop(possible_corrupt_parts.index(corrupt_parts[-1]))
+        if corrupt_parts[-1]+1 in possible_corrupt_parts:
+            possible_corrupt_parts.pop(possible_corrupt_parts.index(corrupt_parts[-1]+1))
+        if corrupt_parts[-1]-1 in possible_corrupt_parts:
+            possible_corrupt_parts.pop(possible_corrupt_parts.index(corrupt_parts[-1]-1))
+    return corrupt_parts
+
+
+def get_random_corrections(correct_part, ghat, e2i, i2e, r2i, head_flag, num_corrections=3):
+    valid_heads_rt, _, valid_tails_rh, _, _, _ = ghat
+    h, r, t = correct_part
+    if head_flag: # corrupting head
+        possible_bad_heads = np.arange(len(e2i))
+        if r[0] == "_":
+            valid_heads = valid_heads_rt[(r2i[r[1:]],e2i[h])]
+            possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+        else:
+            valid_heads = valid_heads_rt[(r2i[r],e2i[t])]
+            possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+        bad_heads = np.random.choice(possible_bad_heads, size=num_corrections, replace=False).tolist()
+        corrections = [",".join([format_ent(i2e[bad_h]), format_relation(r)[1:-1], format_ent(t)]) for bad_h in bad_heads]
+    else: # corrupting tail
+        possible_bad_tails = np.arange(len(e2i))
+        if r[0] == "_":
+            valid_tails = valid_tails_rh[(r2i[r[1:]],e2i[t])]
+            possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+        else:
+            valid_tails = valid_tails_rh[(r2i[r],e2i[h])]
+            possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+        bad_tails = np.random.choice(possible_bad_tails, size=num_corrections, replace=False).tolist()
+        corrections = [",".join([format_ent(h), format_relation(r)[1:-1], format_ent(i2e[bad_t])]) for bad_t in bad_tails]
+    return corrections
+
+
+def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i):
     _, _, _, _, h_dom, t_dom = ghat
+    corrupt_path = []
+    prev_tail = None
+    for part_id in range(len(correct_path)):
+        correct_part = correct_path[part_id]
+        h, r, t = correct_part
+        # double check not corrupting head & tail of same triple
+        assert not (part_id in corrupt_ids and part_id+1 in corrupt_ids)
+        assert not (part_id in corrupt_ids and part_id-1 in corrupt_ids)
+        # form corrupt_part
+        corrupt_part = {}
+        corrupt_part["idx"] = str(part_id)
+        if args["explain"]["corrupt_json"] and (part_id in corrupt_ids): # corrupting head of current part
+            if r[0] == "_":
+                bad_heads = np.random.choice(t_dom[(r[1:],t)], size=min(3,len(t_dom[(r[1:],t)])), replace=False).tolist()
+            else:
+                bad_heads = np.random.choice(h_dom[(r,t)], size=min(3,len(h_dom[(r,t)])), replace=False).tolist()
+            fmt_bad_heads = [format_ent(hh) for hh in bad_heads]
+            if not len(fmt_bad_heads):
+                corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
+                corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
+                corrupt_part["correct_id"] = -1
+                corrupt_path.append(corrupt_part)
+                prev_tail = None
+                continue
+            swap_idx = np.random.randint(0, len(fmt_bad_heads))
+            if prev_tail is None:
+                bad_h = fmt_bad_heads.pop(swap_idx)
+            else:
+                fmt_bad_heads.pop(swap_idx)
+                bad_h = copy(prev_tail)
+                prev_tail = None
+            fmt_bad_heads.insert(swap_idx, format_ent(h))
+            corrupt_part["str"] = ",".join([bad_h, format_relation(r)[1:-1], format_ent(t)])
+            corrupt_part["corrections"] = [",".join([fmt_bad_h, format_relation(r)[1:-1], format_ent(t)]) for fmt_bad_h in fmt_bad_heads]
+            corrupt_part["correct_id"] = swap_idx
+        elif args["explain"]["corrupt_json"] and (part_id+1 in corrupt_ids): # corrupting tail of current part
+            if r[0] == "_":
+                bad_tails = np.random.choice(h_dom[(r[1:],h)], size=min(3,len(h_dom[(r[1:],h)])), replace=False).tolist()
+            else:
+                bad_tails = np.random.choice(t_dom[(r,h)], size=min(3,len(t_dom[(r,h)])), replace=False).tolist()
+            fmt_bad_tails = [format_ent(tt) for tt in bad_tails]
+            if not len(fmt_bad_tails):
+                corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
+                corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
+                corrupt_part["correct_id"] = -1
+                corrupt_path.append(corrupt_part)
+                prev_tail = None
+                continue
+            swap_idx = np.random.randint(0, len(fmt_bad_tails))
+            bad_t = fmt_bad_tails.pop(swap_idx)
+            prev_tail = bad_t
+            fmt_bad_tails.insert(swap_idx, format_ent(t))
+            corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], bad_t])
+            corrupt_part["corrections"] = [",".join([format_ent(h), format_relation(r)[1:-1], fmt_bad_t]) for fmt_bad_t in fmt_bad_tails]
+            corrupt_part["correct_id"] = swap_idx
+        else: # if not corrupting head or tail, only provide correct part
+            corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
+            corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
+            corrupt_part["correct_id"] = -1
+            prev_tail = None
+        corrupt_path.append(corrupt_part)
+    return corrupt_path
+
+
+def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + "_gnd"
@@ -788,9 +896,10 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
             else:
                 gnd_path_bk = gnd_paths_bk[bk_id[pair_idx]]
             gnd_paths.append(gnd_path_fr + connection + gnd_path_bk)
-    # store the grounded explanation
+    # stores the grounded explanation for debug
     explanation_df = pd.DataFrame(columns=["explanation","head","tail","y_logit","y_hat"])
     explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
+    # stores the grounded, possibly corrupted, explanations for AMT in JSON
     exp_json = []
     for path in gnd_paths:
         if type(path) == str:
@@ -798,28 +907,28 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
         else:
             short_path = remove_redundancies(path)
             path_str, fmt_path = format_path(short_path)
-            exp = {
-                "triple": format_ent(head) + format_relation(rel) + format_ent(tail),
-                "y_bb": str(label),
-                "y_xm": str(pred),
-                "str": path_str,
-                "parts": []
-            }
-            for i in range(len(short_path)):
-                h, r, t = short_path[i]
-                part = {}
-                part["idx"] = str(i)
-                part["str"] = ",".join(fmt_path[i])
-                if r[0] == "_":
-                    heads = np.random.choice(t_dom[(r[1:],t)], size=min(3,len(t_dom[(r[1:],t)])), replace=False).tolist()
-                    tails = np.random.choice(h_dom[(r[1:],h)], size=min(3,len(h_dom[(r[1:],h)])), replace=False).tolist()
-                else:
-                    heads = np.random.choice(t_dom[(r,h)], size=min(3,len(t_dom[(r,h)])), replace=False).tolist()
-                    tails = np.random.choice(h_dom[(r,t)], size=min(3,len(h_dom[(r,t)])), replace=False).tolist()
-                part["heads"] = [format_ent(hh) for hh in heads]
-                part["tails"] = [format_ent(tt) for tt in tails]
-                exp["parts"].append(part)
-            exp_json.append(exp)
+            if label == pred and pred == 1:
+                # prepare for path corruption
+                if args["explain"]["corrupt_json"]:
+                    corrupt_parts = get_path_corrupt_parts(short_path)
+                exp = {"y_bb": str(label), "y_xm": str(pred), "parts": []}
+                # corrupt corrupt_parts of path
+                exp["parts"] = fmt_corrupt_part(args, short_path, corrupt_parts, ghat, e2i, i2e, r2i)
+                # set predicted triple, accounting for new corruptions
+                if 0 in corrupt_parts and len(short_path) in corrupt_parts:
+                    fmt_bad_head = exp["parts"][0]["str"].split(",")[0]
+                    fmt_bad_tail = exp["parts"][-1]["str"].split(",")[-1]
+                    exp["triple"] = fmt_bad_head + format_relation(rel) + fmt_bad_tail
+                elif 0 in corrupt_parts: # head needs to be first path head, which was corrupted
+                    fmt_bad_head = exp["parts"][0]["str"].split(",")[0]
+                    exp["triple"] = fmt_bad_head + format_relation(rel) + format_ent(tail)
+                elif len(short_path) in corrupt_parts: # tail needs to be last path tail, which was corrupted
+                    fmt_bad_tail = exp["parts"][-1]["str"].split(",")[-1]
+                    exp["triple"] = format_ent(head) + format_relation(rel) + fmt_bad_tail
+                else: # neither first head, nor last tail of path were corrupted
+                    exp["triple"] = format_ent(head) + format_relation(rel) + format_ent(tail)
+                # store the example predict triple/path combo
+                exp_json.append(exp)
         explanation_df = explanation_df.append({"explanation": path_str}, ignore_index=True)
     explanation_df.to_csv(os.path.join(ex_fp, file_name + '.tsv'), sep='\t')
     return exp_json
@@ -877,7 +986,7 @@ def format_relation(rel):
         "InverseActionOf": " is the opposite action of ",
         "InverseStateOf": " is the opposite state of ",
         "LocInRoom": " is often in ",
-        "ObjCanBe": " can have  performed on it",
+        "ObjCanBe": " can have performed on it ",
         "ObjInLoc": " is often in ",
         "ObjInRoom": " is often in ",
         "ObjOnLoc": " is often on ",
@@ -901,11 +1010,11 @@ def format_relation(rel):
 
 def format_ent(ent):
     if ent[-1] == "a":
-        ent_str = "the {} action".format(ent[:-2])
+        ent_str = "the {} action".format(ent.replace('_',' ')[:-2])
     elif ent[-1] == "s":
-        ent_str = "the {} state".format(ent[:-2])
+        ent_str = "the {} state".format(ent.replace('_',' ')[:-2])
     else:
-        ent_str = "a {}".format(ent[:-2])
+        ent_str = "a {}".format(ent.replace('_',' ')[:-2])
     return ent_str
 
 
