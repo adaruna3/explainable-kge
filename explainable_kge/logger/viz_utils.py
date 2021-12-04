@@ -1,5 +1,6 @@
 from argparse import Action
 import os
+import json
 from copy import copy
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
@@ -811,13 +812,58 @@ def global_plot(args):
     return [fig]
 
 
+def amt_plot(args):
+    fp = os.path.join("explainable_kge/logger/logs", args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(args["logging"]["log_num"]))
+    results_fp = os.path.join(os.path.abspath(fp), "results")
+    locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+    # load the corrupted json for testing
+    json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
+    json_fp = os.path.join(results_fp, json_name + '.json')
+    with open(json_fp, "r") as f:
+        exp_json = json.load(f)
+    # load the amt results
+    amt_folder = "amt_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
+    amt_fp = os.path.join(results_fp, amt_folder)
+    amt_results_fps = [os.path.join(amt_fp, file) for file in os.listdir(amt_fp) if file.endswith(".json")]
+    amt_results = []
+    for i, amt_results_fp in enumerate(amt_results_fps):
+        with open(amt_results_fp, "r") as f:
+            amt_results.append(json.load(f))
+    # process amt results compared to correct
+    correct_acc = []
+    for amt_result in amt_results:
+        fixed_corruptions = 0
+        total_corruptions = 0
+        start = amt_result["testId"] * args["plotting"]["num_examples"]
+        stop = start + args["plotting"]["num_examples"]
+        corrupt_answers = exp_json[start:stop]
+        for i in range(len(amt_result["test"])):
+            true_corrections = [part['correct_id'] for part in corrupt_answers[i]['parts']]
+            amt_corrections = amt_result["test"][i]
+            assert len(true_corrections) == len(amt_corrections)
+            fixed_corruptions += np.count_nonzero(np.asarray(true_corrections) == np.asarray(amt_corrections))
+            total_corruptions += len(true_corrections)
+        correct_acc.append(fixed_corruptions / total_corruptions)
+    print("Mean: " + str(np.mean(correct_acc)))
+    print("Std: " + str(np.std(correct_acc)))
+    fig = plot_table(stats=np.asarray([[np.mean(correct_acc), np.std(correct_acc)]]),
+                     row_labels=["AMT Test"],
+                     col_labels=["Mean", "Std"])
+    return [fig]
+
+
 if __name__ == "__main__":
     exp_config = load_config("Experiment Visualizations")
     plt.rcParams.update({'font.weight': 'bold'})
     figs = []
-    figs += locality_plot(exp_config)
-    figs += global_plot(exp_config)
-    figs += best_locality(exp_config)
-    main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
-    figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"]))
+    if exp_config["plotting"]["mode"] == "amt":
+        figs += amt_plot(exp_config)
+        main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
+        figs_fp = os.path.join(main_fp, "results", "amt_{}.pdf".format(exp_config["explain"]["xmodel"]))
+    else:
+        figs += locality_plot(exp_config)
+        figs += global_plot(exp_config)
+        figs += best_locality(exp_config)
+        main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
+        figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"]))
     figs2pdf(figs, figs_fp)

@@ -32,8 +32,7 @@ it and run `sbt test` inside the `pra` submodule.
 I. Post-process explanation outputs
     c. Final grammar fixes
 II. User-study Design
-    b. Design the survey UI with data output
-    c. Test with Devleena and others
+    b. Iterate on UI
     d. Put live
 III. Improve methods to corrupt the dataset
 IV. Try to get feedback and retrain KGE

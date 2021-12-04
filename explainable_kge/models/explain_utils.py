@@ -743,7 +743,10 @@ def get_path_corrupt_parts(short_path):
     possible_corrupt_parts = [i for i in range(len(short_path) + 1)]
     corrupt_parts = []
     while len(corrupt_parts) < num_corrupt_parts:
-        corrupt_parts.append(np.random.choice(possible_corrupt_parts))
+        if len(corrupt_parts) == 0: # ensure head or tail of predicted triple corrupted
+            corrupt_parts.append(np.random.choice([0,len(short_path)]))
+        else:
+            corrupt_parts.append(np.random.choice(possible_corrupt_parts))
         possible_corrupt_parts.pop(possible_corrupt_parts.index(corrupt_parts[-1]))
         if corrupt_parts[-1]+1 in possible_corrupt_parts:
             possible_corrupt_parts.pop(possible_corrupt_parts.index(corrupt_parts[-1]+1))
@@ -778,7 +781,7 @@ def get_random_corrections(correct_part, ghat, e2i, i2e, r2i, head_flag, num_cor
     return corrections
 
 
-def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i):
+def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i, embeddings):
     _, _, _, _, h_dom, t_dom = ghat
     corrupt_path = []
     prev_tail = None
@@ -793,17 +796,29 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i):
         corrupt_part["idx"] = str(part_id)
         if args["explain"]["corrupt_json"] and (part_id in corrupt_ids): # corrupting head of current part
             if r[0] == "_":
-                bad_heads = np.random.choice(t_dom[(r[1:],t)], size=min(3,len(t_dom[(r[1:],t)])), replace=False).tolist()
+                incorrect_ents = t_dom[(r[1:],t)]
             else:
-                bad_heads = np.random.choice(h_dom[(r,t)], size=min(3,len(h_dom[(r,t)])), replace=False).tolist()
+                incorrect_ents = h_dom[(r,t)]
+            # rank according to dissimilarity to h
+            incorrect_ents.insert(0, h)
+            incorrect_embeddings = np.asarray([embeddings[e2i[hh],:] for hh in incorrect_ents])
+            dist, idxs = get_knn(incorrect_embeddings)
+            incorrect_dists = [None] * len(incorrect_ents)
+            for i, hh in enumerate(incorrect_ents): incorrect_dists[idxs[0,i]] = dist[0,i]
+            incorrect_idxs = np.argsort(incorrect_dists)
+            bad_heads = np.asarray(incorrect_ents)[incorrect_idxs[-3:]].tolist()
+            # add random heads if needed
+            if len(bad_heads) < 3:
+                random_ents = list(e2i.keys())
+                # rank according to dissimilarity to h
+                random_ents.insert(0, h)
+                random_embeddings = np.asarray([embeddings[e2i[hh],:] for hh in random_ents])
+                dist, idxs = get_knn(random_embeddings)
+                random_dists = [None] * len(random_ents)
+                for i, hh in enumerate(random_ents): random_dists[idxs[0,i]] = dist[0,i]
+                random_idxs = np.argsort(random_dists)
+                bad_heads += np.asarray(random_ents)[random_idxs[-(3 - len(incorrect_ents)):]].tolist()
             fmt_bad_heads = [format_ent(hh) for hh in bad_heads]
-            if not len(fmt_bad_heads):
-                corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
-                corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
-                corrupt_part["correct_id"] = -1
-                corrupt_path.append(corrupt_part)
-                prev_tail = None
-                continue
             swap_idx = np.random.randint(0, len(fmt_bad_heads))
             if prev_tail is None:
                 bad_h = fmt_bad_heads.pop(swap_idx)
@@ -817,17 +832,36 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i):
             corrupt_part["correct_id"] = swap_idx
         elif args["explain"]["corrupt_json"] and (part_id+1 in corrupt_ids): # corrupting tail of current part
             if r[0] == "_":
-                bad_tails = np.random.choice(h_dom[(r[1:],h)], size=min(3,len(h_dom[(r[1:],h)])), replace=False).tolist()
+                incorrect_ents = h_dom[(r[1:],h)]
             else:
-                bad_tails = np.random.choice(t_dom[(r,h)], size=min(3,len(t_dom[(r,h)])), replace=False).tolist()
+                incorrect_ents = t_dom[(r,h)]
+            # rank according to dissimilarity to t
+            incorrect_ents.insert(0, t)
+            incorrect_embeddings = np.asarray([embeddings[e2i[tt],:] for tt in incorrect_ents])
+            dist, idxs = get_knn(incorrect_embeddings)
+            incorrect_dists = [None] * len(incorrect_ents)
+            for i, tt in enumerate(incorrect_ents): incorrect_dists[idxs[0,i]] = dist[0,i]
+            incorrect_idxs = np.argsort(incorrect_dists)
+            bad_tails = np.asarray(incorrect_ents)[incorrect_idxs[-3:]].tolist()
+            # add random tails if needed
+            if len(bad_tails) < 3:
+                random_ents = list(e2i.keys())
+                # rank according to dissimilarity to t
+                random_ents.insert(0, t)
+                random_embeddings = np.asarray([embeddings[e2i[tt],:] for tt in random_ents])
+                dist, idxs = get_knn(random_embeddings)
+                random_dists = [None] * len(random_ents)
+                for i, tt in enumerate(random_ents): random_dists[idxs[0,i]] = dist[0,i]
+                random_idxs = np.argsort(random_dists)
+                bad_tails += np.asarray(random_ents)[random_idxs[-(3 - len(incorrect_ents)):]].tolist()
             fmt_bad_tails = [format_ent(tt) for tt in bad_tails]
-            if not len(fmt_bad_tails):
-                corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
-                corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
-                corrupt_part["correct_id"] = -1
-                corrupt_path.append(corrupt_part)
-                prev_tail = None
-                continue
+            # if not len(fmt_bad_tails):
+            #     corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
+            #     corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
+            #     corrupt_part["correct_id"] = -1
+            #     corrupt_path.append(corrupt_part)
+            #     prev_tail = None
+            #     continue
             swap_idx = np.random.randint(0, len(fmt_bad_tails))
             bad_t = fmt_bad_tails.pop(swap_idx)
             prev_tail = bad_t
@@ -844,7 +878,7 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i):
     return corrupt_path
 
 
-def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
+def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ent_embeddings, ghat, e2i, i2e, r2i, device):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + "_gnd"
@@ -907,13 +941,14 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
         else:
             short_path = remove_redundancies(path)
             path_str, fmt_path = format_path(short_path)
-            if label == pred and pred == 1:
+            # only test path where BB and XM agree, and path is not a repeat of predicted triple
+            if label == pred and pred == 1 and (len(short_path) > 1 or short_path[0][1].replace("_","") != rel.replace("_","")):
                 # prepare for path corruption
                 if args["explain"]["corrupt_json"]:
                     corrupt_parts = get_path_corrupt_parts(short_path)
                 exp = {"y_bb": str(label), "y_xm": str(pred), "parts": []}
                 # corrupt corrupt_parts of path
-                exp["parts"] = fmt_corrupt_part(args, short_path, corrupt_parts, ghat, e2i, i2e, r2i)
+                exp["parts"] = fmt_corrupt_part(args, short_path, corrupt_parts, ghat, e2i, i2e, r2i, ent_embeddings)
                 # set predicted triple, accounting for new corruptions
                 if 0 in corrupt_parts and len(short_path) in corrupt_parts:
                     fmt_bad_head = exp["parts"][0]["str"].split(",")[0]
@@ -985,14 +1020,14 @@ def format_relation(rel):
         "HasEffect": " results in ",
         "InverseActionOf": " is the opposite action of ",
         "InverseStateOf": " is the opposite state of ",
-        "LocInRoom": " is often in ",
+        "LocInRoom": " can often be found in ",
         "ObjCanBe": " can have performed on it ",
         "ObjInLoc": " is often in ",
-        "ObjInRoom": " is often in ",
+        "ObjInRoom": " can often be found in ",
         "ObjOnLoc": " is often on ",
-        "ObjUsedTo": " is used to perform ",
+        "ObjUsedTo": " can be used to perform ",
         "ObjhasState": " has a possible state of ",
-        "OperatesOn": " operates on ",
+        "OperatesOn": " can change the state of ",
         "_HasEffect": " is caused by ",
         "_InverseActionOf": " is the opposite action of ",
         "_InverseStateOf": " is the opposite state of ",
@@ -1001,9 +1036,9 @@ def format_relation(rel):
         "_ObjInLoc": " often can contain ",
         "_ObjInRoom": " often can contain ",
         "_ObjOnLoc": " often can contain ",
-        "_ObjUsedTo": " can be done with ",
+        "_ObjUsedTo": " can be done using ",
         "_ObjhasState": " is a possible state of ",
-        "_OperatesOn": " can be operated on by ",
+        "_OperatesOn": " can have its state changed by ",
     }
     return format_rel[rel]
     
@@ -1073,17 +1108,24 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
         valid_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "valid.tsv")
         test_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "test.tsv")
         tr_heads, tr_tails, tr_y, tr_feat_dicts = parse_feature_matrix(train_fp)
-        de_heads, de_tails, de_y, de_feat_dicts = parse_feature_matrix(valid_fp)
+        # de_heads, de_tails, de_y, de_feat_dicts = parse_feature_matrix(valid_fp)
+        # v = DictVectorizer(sparse=True)
+        # v.fit(tr_feat_dicts + de_feat_dicts)
+        # train_x = v.transform(tr_feat_dicts)
+        # valid_x = v.transform(de_feat_dicts)
+        # tr_heads = np.concatenate((tr_heads, de_heads))
+        # tr_tails = np.concatenate((tr_tails, de_tails))
+        # tr_y = np.concatenate((tr_y, de_y))
+        # train_x = vstack((train_x, valid_x))
+        # feature_names = v.get_feature_names()
+        # te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(test_fp)
+        # DEBUG
         v = DictVectorizer(sparse=True)
-        v.fit(tr_feat_dicts + de_feat_dicts)
+        v.fit(tr_feat_dicts)
         train_x = v.transform(tr_feat_dicts)
-        valid_x = v.transform(de_feat_dicts)
-        tr_heads = np.concatenate((tr_heads, de_heads))
-        tr_tails = np.concatenate((tr_tails, de_tails))
-        tr_y = np.concatenate((tr_y, de_y))
-        train_x = vstack((train_x, valid_x))
         feature_names = v.get_feature_names()
-        te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(test_fp)
+        te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(valid_fp)
+        # DEBUG
         test_x = v.transform(te_feat_dicts)
         fit_model = True
     #     b. Sample local training set for each test triple
@@ -1095,15 +1137,16 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                 train_y_local = tr_y
             else:
                 # various methods for selecting subgraph g to sample
+                locality_k = k if type(k) == int else list(k)[rel_id]
                 if args["explain"]["locality"] == "local1":
                     examples_indices = get_local_data1(te_head, te_tail, tr_heads, tr_tails)
                 elif args["explain"]["locality"] == "local2":
-                    examples_indices = get_local_data2(knn, k, te_head, te_tail, tr_heads, tr_tails, e2i, i2e)
+                    examples_indices = get_local_data2(knn, locality_k, te_head, te_tail, tr_heads, tr_tails, e2i, i2e)
                 elif args["explain"]["locality"] == "local3":
                     pos_mask = tr_y == 1
                     neg_mask = tr_y == -1
                     min_examples = min(np.count_nonzero(pos_mask), np.count_nonzero(neg_mask))
-                    locality = min(args["explain"]["locality_k"], min_examples)
+                    locality = min(locality_k, min_examples)
                     pos = get_local_data3(te_head, te_tail, tr_heads, tr_tails, ent_embeddings, 
                                           e2i, locality, pos_mask)
                     neg = get_local_data3(te_head, te_tail, tr_heads, tr_tails, ent_embeddings, 
@@ -1161,7 +1204,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
             else:
                 paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
             if args["explain"]["ground_explanations"]:
-                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
+                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ent_embeddings, ghat, e2i, i2e, r2i, device)
                 exp_json += exp
             results = results.append({"rel": rel,
                                       "sample": test_pair,
@@ -1172,7 +1215,8 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
             if args["explain"]["locality"] == "global":
                 fit_model = False
     if args["explain"]["ground_explanations"]:
-        json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(args["explain"]["locality_k"])
+        locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+        json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
         json_fp = os.path.join(sfe_fp, json_name + '.json')
         with open(json_fp, "w") as f:
             json.dump(exp_json, f)
