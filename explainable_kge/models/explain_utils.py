@@ -5,6 +5,7 @@ from copy import copy
 import itertools
 import pickle
 import json
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -93,13 +94,16 @@ def get_p_triples(batch_head, batch_rel, batch_tail, i2e, i2r, scores, threshold
     return positives
 
 
-def ghat_triple_generator(nbrs, triples, max_nbrs):
-    for triple in triples:
-        for ghat_triple in itertools.product(nbrs[triple[0,0]][:max_nbrs], [triple[0,1]], nbrs[triple[0,2]][:max_nbrs]):
+def ghat_triple_generator(nbrs, dataset, max_nbrs):
+    num_head_nbrs = list(max_nbrs[0])
+    num_tail_nbrs = list(max_nbrs[1])
+    for batch in dataset:
+        h, r, t, _ = batch[0,:]
+        for ghat_triple in itertools.product(nbrs[h][:num_head_nbrs[r]], [r], nbrs[t][:num_tail_nbrs[r]]):
             yield [ghat_triple[0], ghat_triple[1], ghat_triple[2]]
 
 
-def generate_ghat(args, knn, dataset, model, thresholds, device, ghat_path=None, max_neighbors=3):    
+def generate_ghat(args, knn, dataset, model, thresholds, device, max_neighbors, ghat_path=None):    
     """
     Generates graph of positive triples for SFE input
     :param args: experiment config
@@ -803,8 +807,11 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i, embed
             incorrect_ents.insert(0, h)
             incorrect_embeddings = np.asarray([embeddings[e2i[hh],:] for hh in incorrect_ents])
             dist, idxs = get_knn(incorrect_embeddings)
+            dist = dist[0][1:]
+            idxs = idxs[0][1:]-1
+            incorrect_ents.pop(0)
             incorrect_dists = [None] * len(incorrect_ents)
-            for i, hh in enumerate(incorrect_ents): incorrect_dists[idxs[0,i]] = dist[0,i]
+            for i, hh in enumerate(incorrect_ents): incorrect_dists[idxs[i]] = dist[i]
             incorrect_idxs = np.argsort(incorrect_dists)
             bad_heads = np.asarray(incorrect_ents)[incorrect_idxs[-3:]].tolist()
             # add random heads if needed
@@ -814,8 +821,11 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i, embed
                 random_ents.insert(0, h)
                 random_embeddings = np.asarray([embeddings[e2i[hh],:] for hh in random_ents])
                 dist, idxs = get_knn(random_embeddings)
+                dist = dist[0][1:]
+                idxs = idxs[0][1:]-1
+                random_ents.pop(0)
                 random_dists = [None] * len(random_ents)
-                for i, hh in enumerate(random_ents): random_dists[idxs[0,i]] = dist[0,i]
+                for i, hh in enumerate(random_ents): random_dists[idxs[i]] = dist[i]
                 random_idxs = np.argsort(random_dists)
                 bad_heads += np.asarray(random_ents)[random_idxs[-(3 - len(incorrect_ents)):]].tolist()
             fmt_bad_heads = [format_ent(hh) for hh in bad_heads]
@@ -839,8 +849,11 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i, embed
             incorrect_ents.insert(0, t)
             incorrect_embeddings = np.asarray([embeddings[e2i[tt],:] for tt in incorrect_ents])
             dist, idxs = get_knn(incorrect_embeddings)
+            dist = dist[0][1:]
+            idxs = idxs[0][1:]-1
+            incorrect_ents.pop(0)
             incorrect_dists = [None] * len(incorrect_ents)
-            for i, tt in enumerate(incorrect_ents): incorrect_dists[idxs[0,i]] = dist[0,i]
+            for i, tt in enumerate(incorrect_ents): incorrect_dists[idxs[i]] = dist[i]
             incorrect_idxs = np.argsort(incorrect_dists)
             bad_tails = np.asarray(incorrect_ents)[incorrect_idxs[-3:]].tolist()
             # add random tails if needed
@@ -850,18 +863,14 @@ def fmt_corrupt_part(args, correct_path, corrupt_ids, ghat, e2i, i2e, r2i, embed
                 random_ents.insert(0, t)
                 random_embeddings = np.asarray([embeddings[e2i[tt],:] for tt in random_ents])
                 dist, idxs = get_knn(random_embeddings)
+                dist = dist[0][1:]
+                idxs = idxs[0][1:]-1
+                random_ents.pop(0)
                 random_dists = [None] * len(random_ents)
-                for i, tt in enumerate(random_ents): random_dists[idxs[0,i]] = dist[0,i]
+                for i, tt in enumerate(random_ents): random_dists[idxs[i]] = dist[i]
                 random_idxs = np.argsort(random_dists)
                 bad_tails += np.asarray(random_ents)[random_idxs[-(3 - len(incorrect_ents)):]].tolist()
             fmt_bad_tails = [format_ent(tt) for tt in bad_tails]
-            # if not len(fmt_bad_tails):
-            #     corrupt_part["str"] = ",".join([format_ent(h), format_relation(r)[1:-1], format_ent(t)])
-            #     corrupt_part["corrections"] = get_random_corrections(correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2))
-            #     corrupt_part["correct_id"] = -1
-            #     corrupt_path.append(corrupt_part)
-            #     prev_tail = None
-            #     continue
             swap_idx = np.random.randint(0, len(fmt_bad_tails))
             bad_t = fmt_bad_tails.pop(swap_idx)
             prev_tail = bad_t
@@ -1108,24 +1117,24 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
         valid_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "valid.tsv")
         test_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "test.tsv")
         tr_heads, tr_tails, tr_y, tr_feat_dicts = parse_feature_matrix(train_fp)
-        # de_heads, de_tails, de_y, de_feat_dicts = parse_feature_matrix(valid_fp)
-        # v = DictVectorizer(sparse=True)
-        # v.fit(tr_feat_dicts + de_feat_dicts)
-        # train_x = v.transform(tr_feat_dicts)
-        # valid_x = v.transform(de_feat_dicts)
-        # tr_heads = np.concatenate((tr_heads, de_heads))
-        # tr_tails = np.concatenate((tr_tails, de_tails))
-        # tr_y = np.concatenate((tr_y, de_y))
-        # train_x = vstack((train_x, valid_x))
-        # feature_names = v.get_feature_names()
-        # te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(test_fp)
-        # DEBUG
+        de_heads, de_tails, de_y, de_feat_dicts = parse_feature_matrix(valid_fp)
         v = DictVectorizer(sparse=True)
-        v.fit(tr_feat_dicts)
+        v.fit(tr_feat_dicts + de_feat_dicts)
         train_x = v.transform(tr_feat_dicts)
+        valid_x = v.transform(de_feat_dicts)
+        tr_heads = np.concatenate((tr_heads, de_heads))
+        tr_tails = np.concatenate((tr_tails, de_tails))
+        tr_y = np.concatenate((tr_y, de_y))
+        train_x = vstack((train_x, valid_x))
         feature_names = v.get_feature_names()
-        te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(valid_fp)
-        # DEBUG
+        te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(test_fp)
+        # # DEBUG
+        # v = DictVectorizer(sparse=True)
+        # v.fit(tr_feat_dicts)
+        # train_x = v.transform(tr_feat_dicts)
+        # feature_names = v.get_feature_names()
+        # te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(valid_fp)
+        # # DEBUG
         test_x = v.transform(te_feat_dicts)
         fit_model = True
     #     b. Sample local training set for each test triple
@@ -1219,6 +1228,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
         json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
         json_fp = os.path.join(sfe_fp, json_name + '.json')
         with open(json_fp, "w") as f:
+            random.shuffle(exp_json)
             json.dump(exp_json, f)
     with open(results_fp, "wb") as f:
         pickle.dump(results, f)

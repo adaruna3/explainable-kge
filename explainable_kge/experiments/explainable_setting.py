@@ -82,7 +82,8 @@ if __name__ == "__main__":
     #     c. Form G^ from all T triples classified by embedding
     ghat_fp = os.path.join(exp_fp, "ghat.tsv")
     if not os.path.exists(ghat_fp):
-        g_hat = x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, ghat_fp, max_neighbors=exp_config["explain"]["ghat_k"])
+        max_nbrs = (exp_config["explain"]["ghat_head_k"], exp_config["explain"]["ghat_tail_k"])
+        g_hat = x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, max_nbrs, ghat_fp)
     else:
         g_hat = pd.read_csv(ghat_fp, sep="\t", header=None).to_numpy(dtype=str)
     g_hat_dicts = x_utils.process_ghat(g_hat, tr_de_d.e2i, tr_de_d.r2i)
