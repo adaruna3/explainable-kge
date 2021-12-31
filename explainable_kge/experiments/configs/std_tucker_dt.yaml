@@ -2,7 +2,7 @@
 cuda: True
 logging:
   # Log Number (+int)
-  log_num: 6
+  log_num: 0
 # Session Mode (TRAIN,TEST)
 sess_mode: TRAIN
 dataset:
@@ -48,7 +48,7 @@ train:
   # Evaluation Frequency (+int)
   valid_freq: 5
   # Early stop Patience (+int)
-  patience: 60
+  patience: 150
   # Cuttoff for triples during Validation (+int)
   valid_cutoff: None
 continual:

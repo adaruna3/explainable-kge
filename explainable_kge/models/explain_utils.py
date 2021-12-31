@@ -138,14 +138,22 @@ def generate_ghat(args, knn, dataset, model, thresholds, device, max_neighbors, 
     return np.asarray(g_hat, dtype=str)
 
 
-def process_ghat(ghat, e2i, r2i):
+def process_ghat(ghat, e2i, i2e, r2i, i2r, num_gt_triples):
+    # combine all triples from ghat and gt
+    str_gt_triples = []
+    for row_id in range(num_gt_triples.shape[0]):
+        hi, ri, ti = num_gt_triples[row_id,:]
+        str_gt_triples.append([i2e[hi],i2r[ri],i2e[ti]])
+    str_gt_triples = np.asarray(str_gt_triples)
+    all_triples = np.unique(np.append(ghat, str_gt_triples, axis=0), axis=0)
+    
     # convert ghat into usable lookup table
     valid_heads_rt = {}
     valid_heads_r = {}
     valid_tails_rh = {}
     valid_tails_r = {}
-    for i in range(ghat.shape[0]):
-        h, r, t = ghat[i,:]
+    for i in range(all_triples.shape[0]):
+        h, r, t = all_triples[i,:]
         h_i = e2i[h]
         r_i = r2i[r]
         t_i = e2i[t]
@@ -173,13 +181,13 @@ def process_ghat(ghat, e2i, r2i):
     # also load corrupt domains
     rel_heads = {}
     rel_tails = {}
-    for row_id in range(ghat.shape[0]):
-        h, r, t = ghat[row_id, :]
+    for row_id in range(all_triples.shape[0]):
+        h, r, t = all_triples[row_id, :]
         rel_heads[r] = []
         rel_tails[r] = []
 
-    for row_id in range(ghat.shape[0]):
-        h, r, t = ghat[row_id,:]
+    for row_id in range(all_triples.shape[0]):
+        h, r, t = all_triples[row_id,:]
         if h not in rel_heads[r]:
             rel_heads[r].append(h)
         if t not in rel_tails[r]:
@@ -193,8 +201,8 @@ def process_ghat(ghat, e2i, r2i):
         for h in rel_heads[r]:
             t_dom[(r,h)] = copy(rel_tails[r])
     # remove all head/tails from relation domain in triples
-    for row_id in range(ghat.shape[0]):
-        h, r, t = ghat[row_id,:]
+    for row_id in range(all_triples.shape[0]):
+        h, r, t = all_triples[row_id,:]
         if t in t_dom[(r,h)]:
             del t_dom[(r,h)][t_dom[(r,h)].index(t)]
         if h in h_dom[(r,t)]:
@@ -773,63 +781,173 @@ def get_path_corrupt_parts(short_path):
     return corrupt_parts
 
 
-def get_random_corrections(args, correct_part, ghat, e2i, i2e, r2i, head_flag, model, device, num_corrections=3):
-    valid_heads_rt, _, valid_tails_rh, _, _, _ = ghat
+def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_ends, end_head, end_rel, end_tail, model, device, num_corrections=3):
+    valid_heads_rt, _, valid_tails_rh, _, h_dom, t_dom = ghat
     h, r, t = correct_part
-    if head_flag: # corrupting head
-        possible_bad_heads = np.arange(len(e2i))
+    if head_flag:
+        # corrupt head with least likely, invalid, same type heads
         if r[0] == "_":
-            valid_heads = valid_heads_rt[(r2i[r[1:]],e2i[h])]
-            possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+            incorrect_ents = t_dom[(r[1:],t)]
         else:
-            valid_heads = valid_heads_rt[(r2i[r],e2i[t])]
-            possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+            incorrect_ents = h_dom[(r,t)]
+        if corrupting_ends:
+            # account for corrupting ends
+            if end_rel[0] == "_":
+                incorrect_ents = list(set(incorrect_ents).union(set(t_dom[(end_rel[1:],end_tail)])))
+            else:
+                incorrect_ents = list(set(incorrect_ents).union(set(h_dom[(end_rel,end_tail)])))
+        if len(incorrect_ents):
+            # rank according to likelihood of satisfying relationship
+            bh = torch.tensor([e2i[ent] for ent in incorrect_ents], dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
+            bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_heads = np.asarray(incorrect_ents)[sort_idxs].tolist()
+            bad_heads = get_non_repeats(all_bad_heads, num_corrections)
+        else:
+            bad_heads = []
+        if len(bad_heads) < 3:
+            # add least likely, invalid corrupt heads if needed
+            possible_bad_heads = np.arange(len(e2i))
+            if r[0] == "_":
+                valid_heads = valid_tails_rh[(r2i[r[1:]],e2i[t])]
+                possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+            else:
+                valid_heads = valid_heads_rt[(r2i[r],e2i[t])]
+                possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+            if corrupting_ends:
+                if end_rel[0] == "_":
+                    valid_heads = valid_tails_rh[(r2i[end_rel[1:]],e2i[end_tail])]
+                    possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+                else:
+                    valid_heads = valid_heads_rt[(r2i[end_rel],e2i[end_tail])]
+                    possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+            # rank according to likelihood of satisfying relationship
+            bh = torch.tensor(possible_bad_heads, dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
+            bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_heads = [i2e[e_id] for e_id in np.asarray(possible_bad_heads)[sort_idxs].tolist()] + bad_heads
+            bad_heads = get_non_repeats(all_bad_heads, num_corrections)
+        return bad_heads
+    else:
+        # corrupt tail with least likely, invalid, same type tails
+        if r[0] == "_":
+            incorrect_ents = h_dom[(r[1:],h)]
+        else:
+            incorrect_ents = t_dom[(r,h)]
+        if corrupting_ends:
+            # account for corrupting ends
+            if end_rel[0] == "_":
+                incorrect_ents = list(set(incorrect_ents).union(set(h_dom[(end_rel[1:],end_head)])))
+            else:
+                incorrect_ents = list(set(incorrect_ents).union(set(t_dom[(end_rel,end_head)])))
         # rank according to likelihood of satisfying relationship
-        bh = torch.tensor(possible_bad_heads, dtype=torch.long)
-        if r[0] == "_":
-            br = torch.tensor(r2i[r[1:]], dtype=torch.long).repeat(len(bh))
+        if len(incorrect_ents):
+            bt = torch.tensor([e2i[ent] for ent in incorrect_ents], dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
+            bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_tails = np.asarray(incorrect_ents)[sort_idxs].tolist()
+            bad_tails = get_non_repeats(all_bad_tails, num_corrections)
         else:
-            br = torch.tensor(r2i[r], dtype=torch.long).repeat(len(bh))
-        bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
-        if args["model"]["name"] == "tucker":
-            scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-            scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-            _, sort_idxs = torch.sort(scores, descending=True)
-            sort_idxs = sort_idxs.cpu().detach().numpy()
-        else:
-            scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-            sort_idxs = np.argsort(scores)
-        all_bad_heads = np.asarray(possible_bad_heads)[sort_idxs].tolist()
-        bad_heads = get_non_repeats(all_bad_heads, num_corrections)
-        corrections = [format_triple(i2e[bad_h], r, t) for bad_h in bad_heads]
-    else: # corrupting tail
-        possible_bad_tails = np.arange(len(e2i))
-        if r[0] == "_":
-            valid_tails = valid_tails_rh[(r2i[r[1:]],e2i[t])]
-            possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
-        else:
-            valid_tails = valid_tails_rh[(r2i[r],e2i[h])]
-            possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
-
-        # rank according to likelihood of satisfying relationship
-        bt = torch.tensor(possible_bad_tails, dtype=torch.long)
-        if r[0] == "_":
-            br = torch.tensor(r2i[r[1:]], dtype=torch.long).repeat(len(bt))
-        else:
-            br = torch.tensor(r2i[r], dtype=torch.long).repeat(len(bt))
-        bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
-        if args["model"]["name"] == "tucker":
-            scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-            scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-            _, sort_idxs = torch.sort(scores, descending=True)
-            sort_idxs = sort_idxs.cpu().detach().numpy()
-        else:
-            scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-            sort_idxs = np.argsort(scores)
-        all_bad_tails = np.asarray(possible_bad_tails)[sort_idxs].tolist()
-        bad_tails = get_non_repeats(all_bad_tails, num_corrections)
-        corrections = [format_triple(h, r, i2e[bad_t]) for bad_t in bad_tails]
-    return corrections
+            bad_tails = []
+        if len(bad_tails) < 3:
+            # add least likely, invalid corrupt tails if needed
+            possible_bad_tails = np.arange(len(e2i))
+            if r[0] == "_":
+                valid_tails = valid_heads_rt[(r2i[r[1:]],e2i[h])]
+                possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+            else:
+                valid_tails = valid_tails_rh[(r2i[r],e2i[h])]
+                possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+            if corrupting_ends:
+                if end_rel[0] == "_":
+                    valid_tails = valid_heads_rt[(r2i[end_rel[1:]],e2i[end_head])]
+                    possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+                else:
+                    valid_tails = valid_tails_rh[(r2i[end_rel],e2i[end_head])]
+                    possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+            # rank according to likelihood of satisfying relationship
+            bt = torch.tensor(possible_bad_tails, dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
+            bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_tails = [i2e[e_id] for e_id in np.asarray(possible_bad_tails)[sort_idxs].tolist()] + bad_tails
+            bad_tails = get_non_repeats(all_bad_tails, num_corrections)
+        return bad_tails
 
 
 def get_non_repeats(ent_list, num_corrupt=3):
@@ -855,7 +973,7 @@ def get_non_repeats(ent_list, num_corrupt=3):
             j = 0
             skip = False
             while j < len(ent_list_norepeat):
-                if ent_list_norepeat[j] == ent_list[i]:
+                if ent_list_norepeat[j][:-2] == ent_list[i][:-2]:
                     i -= 1
                     skip = True
                     break
@@ -882,66 +1000,7 @@ def fmt_corrupt_part(args, head, rel, tail, correct_path, corrupt_ids, ghat, e2i
         corrupt_part = {}
         corrupt_part["idx"] = str(part_id)
         if args["explain"]["corrupt_json"] and (part_id in corrupt_ids): # corrupting head of current part
-            if r[0] == "_":
-                incorrect_ents = t_dom[(r[1:],t)]
-            else:
-                incorrect_ents = h_dom[(r,t)]
-            if len(incorrect_ents):
-                # rank according to likelihood of satisfying relationship
-                bh = torch.tensor([e2i[ent] for ent in incorrect_ents], dtype=torch.long)
-                br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
-                bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
-                if args["model"]["name"] == "tucker":
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                    scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                    if part_id == 0:
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bh))
-                        bt = torch.tensor(e2i[tail], dtype=torch.long).repeat(len(bh))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                        scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                        scores += scores_
-                    _, sort_idxs = torch.sort(scores, descending=True)
-                    sort_idxs = sort_idxs.cpu().detach().numpy()
-                else:
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                    if part_id == 0:
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bh))
-                        bt = torch.tensor(e2i[tail], dtype=torch.long).repeat(len(bh))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                        scores += scores_
-                    sort_idxs = np.argsort(scores)
-                all_bad_heads = np.asarray(incorrect_ents)[sort_idxs].tolist()
-                bad_heads = get_non_repeats(all_bad_heads, num_corrupt)
-            else:
-                bad_heads = []
-            # add random heads if needed
-            if len(bad_heads) < 3:
-                random_ents = list(e2i.keys())
-                # rank according to likelihood of satisfying relationship
-                bh = torch.tensor([e2i[ent] for ent in random_ents], dtype=torch.long)
-                br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
-                bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
-                if args["model"]["name"] == "tucker":
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                    scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                    if part_id == 0:
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bh))
-                        bt = torch.tensor(e2i[tail], dtype=torch.long).repeat(len(bh))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                        scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                        scores += scores_
-                    _, sort_idxs = torch.sort(scores, descending=True)
-                    sort_idxs = sort_idxs.cpu().detach().numpy()
-                else:
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                    if part_id == 0:
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bh))
-                        bt = torch.tensor(e2i[tail], dtype=torch.long).repeat(len(bh))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                        scores += scores_
-                    sort_idxs = np.argsort(scores)
-                all_bad_heads = np.asarray(random_ents)[sort_idxs].tolist() + bad_heads
-                bad_heads = get_non_repeats(all_bad_heads, num_corrupt)
+            bad_heads = get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, True, part_id == 0, head, rel, tail, model, device, num_corrupt)
             swap_idx = np.random.randint(0, len(bad_heads))
             if prev_tail is None:
                 bad_h = bad_heads.pop(swap_idx)
@@ -953,69 +1012,15 @@ def fmt_corrupt_part(args, head, rel, tail, correct_path, corrupt_ids, ghat, e2i
             corrupt_part["fact"] = ",".join([h,r,t])
             corrupt_part["fact_corrupted"] = ",".join([bad_h,r,t])
             corrupt_part["str"] = format_triple(bad_h,r,t)
-            corrupt_part["corrections"] = [format_triple(bad_h,r,t) for bad_h in bad_heads]
+            corrupt_part["str_list"] = format_triple_list(bad_h,r,t)
+            if r in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]:
+                corrupt_part["colors"] = ["b","b","r"]
+            else:
+                corrupt_part["colors"] = ["r","b","b"]
+            corrupt_part["corrections"] = [format_triple_list(bad_h,r,t) for bad_h in bad_heads]
             corrupt_part["correct_id"] = swap_idx
         elif args["explain"]["corrupt_json"] and (part_id+1 in corrupt_ids): # corrupting tail of current part
-            if r[0] == "_":
-                incorrect_ents = h_dom[(r[1:],h)]
-            else:
-                incorrect_ents = t_dom[(r,h)]
-            # rank according to likelihood of satisfying relationship
-            if len(incorrect_ents):
-                bt = torch.tensor([e2i[ent] for ent in incorrect_ents], dtype=torch.long)
-                br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
-                bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
-                if args["model"]["name"] == "tucker":
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                    scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                    if part_id+1 == len(correct_path): # corrupting last tail, account for that
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bt))
-                        bh = torch.tensor(e2i[head], dtype=torch.long).repeat(len(bt))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                        scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                        scores += scores_
-                    _, sort_idxs = torch.sort(scores, descending=True)
-                    sort_idxs = sort_idxs.cpu().detach().numpy()
-                else:
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                    if part_id+1 == len(correct_path): # corrupting last tail, account for that
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bt))
-                        bh = torch.tensor(e2i[head], dtype=torch.long).repeat(len(bt))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                        scores += scores_
-                    sort_idxs = np.argsort(scores)
-                all_bad_tails = np.asarray(incorrect_ents)[sort_idxs].tolist()
-                bad_tails = get_non_repeats(all_bad_tails, num_corrupt)
-            else:
-                bad_tails = []
-            # add random tails if needed
-            if len(bad_tails) < 3:
-                random_ents = list(e2i.keys())
-                # rank according to likelihood of satisfying relationship
-                bt = torch.tensor([e2i[ent] for ent in random_ents], dtype=torch.long)
-                br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
-                bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
-                if args["model"]["name"] == "tucker":
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                    scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                    if part_id+1 == len(correct_path): # corrupting last tail, account for that
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bt))
-                        bh = torch.tensor(e2i[head], dtype=torch.long).repeat(len(bt))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
-                        scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
-                        scores += scores_
-                    _, sort_idxs = torch.sort(scores, descending=True)
-                    sort_idxs = sort_idxs.cpu().detach().numpy()
-                else:
-                    scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                    if part_id+1 == len(correct_path): # corrupting last tail, account for that
-                        br = torch.tensor(r2i[rel.replace("_","")], dtype=torch.long).repeat(len(bt))
-                        bh = torch.tensor(e2i[head], dtype=torch.long).repeat(len(bt))
-                        scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
-                        scores += scores_
-                    sort_idxs = np.argsort(scores)
-                all_bad_tails = np.asarray(random_ents)[sort_idxs].tolist()
-                bad_tails = get_non_repeats(all_bad_tails, num_corrupt)
+            bad_tails = get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, False, part_id+1 == len(correct_path), head, rel, tail, model, device, num_corrupt)
             swap_idx = np.random.randint(0, len(bad_tails))
             bad_t = bad_tails.pop(swap_idx)
             prev_tail = bad_t
@@ -1023,13 +1028,26 @@ def fmt_corrupt_part(args, head, rel, tail, correct_path, corrupt_ids, ghat, e2i
             corrupt_part["fact"] = ",".join([h,r,t])
             corrupt_part["fact_corrupted"] = ",".join([h,r,bad_t])
             corrupt_part["str"] = format_triple(h,r,bad_t)
-            corrupt_part["corrections"] = [format_triple(h,r,bad_t) for bad_t in bad_tails]
+            corrupt_part["str_list"] = format_triple_list(h,r,bad_t)
+            if r in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]:
+                corrupt_part["colors"] = ["r","b","b"]
+            else:
+                corrupt_part["colors"] = ["b","b","r"]
+            corrupt_part["corrections"] = [format_triple_list(h,r,bad_t) for bad_t in bad_tails]
             corrupt_part["correct_id"] = swap_idx
-        else: # if not corrupting head or tail, only provide correct part
+        else: # not corrupting either
             corrupt_part["fact"] = ",".join([h,r,t])
             corrupt_part["fact_corrupted"] = ",".join([h,r,t])
             corrupt_part["str"] = format_triple(h,r,t)
-            corrupt_part["corrections"] = get_random_corrections(args, correct_part, ghat, e2i, i2e, r2i, np.random.randint(0,2), model, device, num_corrupt)
+            corrupt_part["str_list"] = format_triple_list(h,r,t)
+            flag = np.random.randint(0,2)
+            corrupt_part["colors"] = ["r","b","b"] if (flag == 1 and r not in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]) or (flag == 0 and r in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]) else ["b","b","r"]
+            bad_ents = get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, flag, part_id+1 == len(correct_path), head, rel, tail, model, device, num_corrupt)
+            if flag:
+                corrections = [format_triple_list(bad_h, r, t) for bad_h in bad_ents]
+            else:
+                corrections = [format_triple_list(h, r, bad_t) for bad_t in bad_ents]
+            corrupt_part["corrections"] = corrections
             corrupt_part["correct_id"] = -1
             prev_tail = None
         corrupt_path.append(corrupt_part)
@@ -1111,21 +1129,25 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
                 if 0 in corrupt_parts and len(short_path) in corrupt_parts:
                     fmt_bad_head = exp["parts"][0]["fact_corrupted"].split(",")[0]
                     fmt_bad_tail = exp["parts"][-1]["fact_corrupted"].split(",")[-1]
-                    exp["triple"] = format_triple(fmt_bad_head, rel, fmt_bad_tail)
+                    exp["str"] = format_triple(fmt_bad_head, rel, fmt_bad_tail)
+                    exp["str_list"] = format_triple_list(fmt_bad_head, rel, fmt_bad_tail)
                     exp["fact_corrupted"] = ",".join([fmt_bad_head, rel, fmt_bad_tail])
                     exp["fact"] = ",".join([head, rel, tail])
                 elif 0 in corrupt_parts: # head needs to be first path head, which was corrupted
                     fmt_bad_head = exp["parts"][0]["fact_corrupted"].split(",")[0]
-                    exp["triple"] = format_triple(fmt_bad_head, rel, tail)
+                    exp["str"] = format_triple(fmt_bad_head, rel, tail)
+                    exp["str_list"] = format_triple_list(fmt_bad_head, rel, tail)
                     exp["fact_corrupted"] = ",".join([fmt_bad_head, rel, tail])
                     exp["fact"] = ",".join([head, rel, tail])
                 elif len(short_path) in corrupt_parts: # tail needs to be last path tail, which was corrupted
                     fmt_bad_tail = exp["parts"][-1]["fact_corrupted"].split(",")[-1]
-                    exp["triple"] = format_triple(head, rel, fmt_bad_tail)
+                    exp["str"] = format_triple(head, rel, fmt_bad_tail)
+                    exp["str_list"] = format_triple_list(head, rel, fmt_bad_tail)
                     exp["fact_corrupted"] = ",".join([head, rel, fmt_bad_tail])
                     exp["fact"] = ",".join([head, rel, tail])
                 else: # neither first head, nor last tail of path were corrupted
-                    exp["triple"] = format_triple(head, rel, tail)
+                    exp["str"] = format_triple(head, rel, tail)
+                    exp["str_list"] = format_triple_list(head, rel, tail)
                     exp["fact_corrupted"] = ",".join([head, rel, tail])
                     exp["fact"] = ",".join([head, rel, tail])
                 # store the example predict triple/path combo
@@ -1152,6 +1174,8 @@ def remove_redundancies(path):
         if redundancy:
             if i == j:
                 del path[i]
+            elif i == 0 and j == len(path)-1:
+                i += 1
             else:
                 del path[i:j+1]
         else:
@@ -1238,10 +1262,14 @@ def format_triple(head, rel, tail):
     }
     if rel in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]:
         fmt_head = tail[:-2]
+        head_type = tail[-1]
         fmt_tail = head[:-2]
+        tail_type = head[-1]
     else:
         fmt_head = head[:-2]
+        head_type = head[-1]
         fmt_tail = tail[:-2]
+        tail_type = tail[-1]
     # article of head
     if rel in ["LocInRoom", "_LocInRoom", "ObjCanBe", "_ObjCanBe", "ObjInLoc", \
                "_ObjInLoc", "ObjInRoom", "_ObjInRoom", "ObjOnLoc", "_ObjOnLoc", \
@@ -1273,24 +1301,24 @@ def format_triple(head, rel, tail):
         else:
             fmt_tail = "a " + fmt_tail
     # tense of head
-    if rel in ["HasEffect", "InverseActionOf", "_InverseActionOf", "_ObjUsedTo"]:
+    if rel in ["HasEffect", "InverseActionOf", "_InverseActionOf", "_ObjUsedTo"] and head_type == "a":
         fmt_head_list = fmt_head.split("_")
         fmt_head_list[0] = add_ing(fmt_head_list[0])
         fmt_head = " ".join(fmt_head_list)
     else:
         fmt_head = fmt_head.replace("_"," ")
     # caps head
-    if rel in ["InverseActionOf","_InverseActionOf","LocInRoom","_LocInRoom", \
-               "ObjCanBe","_ObjCanBe","ObjInLoc","_ObjInLoc","ObjInRoom", \
-               "_ObjInRoom","ObjOnLoc","_ObjOnLoc","ObjUsedTo","_ObjUsedTo", \
-               "ObjhasState","_ObjhasState","OperatesOn","_OperatesOn"]:
-        fmt_head = fmt_head.capitalize()
+    # if rel in ["InverseActionOf","_InverseActionOf","LocInRoom","_LocInRoom", \
+    #            "ObjCanBe","_ObjCanBe","ObjInLoc","_ObjInLoc","ObjInRoom", \
+    #            "_ObjInRoom","ObjOnLoc","_ObjOnLoc","ObjUsedTo","_ObjUsedTo", \
+    #            "ObjhasState","_ObjhasState","OperatesOn","_OperatesOn"]:
+    #     fmt_head = fmt_head.capitalize()
     # tense of tail
-    if rel in ["InverseActionOf", "_HasEffect", "_InverseActionOf"]:
+    if rel in ["InverseActionOf", "_HasEffect", "_InverseActionOf"] and tail_type == "a":
         fmt_tail_list = fmt_tail.split("_")
         fmt_tail_list[0] = add_ing(fmt_tail_list[0])
         fmt_tail = " ".join(fmt_tail_list)
-    elif rel in ["ObjCanBe", "_ObjCanBe"]:
+    elif rel in ["ObjCanBe", "_ObjCanBe"] and tail_type == "a":
         fmt_tail_list = fmt_tail.split("_")
         fmt_tail_list[0] = add_ed(fmt_tail_list[0])
         fmt_tail = " ".join(fmt_tail_list)
@@ -1301,6 +1329,74 @@ def format_triple(head, rel, tail):
     # parser = GingerIt()
     # return parser.parse(fmt_triple)['result']
     return fmt_triple
+
+
+def format_triple_list(head, rel, tail):
+    if rel in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]:
+        fmt_head = tail[:-2]
+        head_type = tail[-1]
+        fmt_tail = head[:-2]
+        tail_type = head[-1]
+    else:
+        fmt_head = head[:-2]
+        head_type = head[-1]
+        fmt_tail = tail[:-2]
+        tail_type = tail[-1]
+    # article of head
+    if rel in ["LocInRoom", "_LocInRoom", "ObjCanBe", "_ObjCanBe", "ObjInLoc", \
+               "_ObjInLoc", "ObjInRoom", "_ObjInRoom", "ObjOnLoc", "_ObjOnLoc", \
+               "ObjUsedTo", "ObjhasState", "_ObjhasState", "OperatesOn", "_OperatesOn"]:
+        if fmt_head in ["alchohol", "bananas", "cereal", "chicken", "chinesefood", \
+                        "chocolate_syrup", "pants", "cutlets", "dishwashingliquid", \
+                        "facecream", "glasses", "hairproduct", "milk", "mincedmeat", \
+                        "multicleaner", "pudding", "salmon", "toilet_paper", "tooth_paste"]:
+            pass
+        elif fmt_head in ["floor", "ceiling"]:
+            fmt_head = "the " + fmt_head
+        elif fmt_head[0] in ["a","e","i","o","u"]:
+            fmt_head = "an " + fmt_head
+        else:
+            fmt_head = "a " + fmt_head
+    # article of tail
+    if rel in ["LocInRoom", "_LocInRoom", "ObjInLoc", "_ObjInLoc", "ObjInRoom", \
+               "_ObjInRoom", "ObjOnLoc", "_ObjOnLoc", "_ObjUsedTo", "OperatesOn", \
+               "_OperatesOn"]:
+        if fmt_tail in ["alchohol", "bananas", "cereal", "chicken", "chinesefood", \
+                        "chocolate_syrup", "pants", "cutlets", "dishwashingliquid", \
+                        "facecream", "glasses", "hairproduct", "milk", "mincedmeat", \
+                        "multicleaner", "pudding", "salmon", "toilet_paper", "tooth_paste"]:
+            pass
+        elif fmt_tail in ["floor", "ceiling"]:
+            fmt_tail = "the " + fmt_tail
+        elif fmt_tail[0] in ["a","e","i","o","u"]:
+            fmt_tail = "an " + fmt_tail
+        else:
+            fmt_tail = "a " + fmt_tail
+    # tense of head
+    if rel in ["HasEffect", "InverseActionOf", "_InverseActionOf", "_ObjUsedTo"] and head_type == "a":
+        fmt_head_list = fmt_head.split("_")
+        fmt_head_list[0] = add_ing(fmt_head_list[0])
+        fmt_head = " ".join(fmt_head_list)
+    else:
+        fmt_head = fmt_head.replace("_"," ")
+    # caps head
+    # if rel in ["InverseActionOf","_InverseActionOf","LocInRoom","_LocInRoom", \
+    #            "ObjCanBe","_ObjCanBe","ObjInLoc","_ObjInLoc","ObjInRoom", \
+    #            "_ObjInRoom","ObjOnLoc","_ObjOnLoc","ObjUsedTo","_ObjUsedTo", \
+    #            "ObjhasState","_ObjhasState","OperatesOn","_OperatesOn"]:
+    #     fmt_head = fmt_head.capitalize()
+    # tense of tail
+    if rel in ["InverseActionOf", "_HasEffect", "_InverseActionOf"] and tail_type == "a":
+        fmt_tail_list = fmt_tail.split("_")
+        fmt_tail_list[0] = add_ing(fmt_tail_list[0])
+        fmt_tail = " ".join(fmt_tail_list)
+    elif rel in ["ObjCanBe", "_ObjCanBe"] and tail_type == "a":
+        fmt_tail_list = fmt_tail.split("_")
+        fmt_tail_list[0] = add_ed(fmt_tail_list[0])
+        fmt_tail = " ".join(fmt_tail_list)
+    else:
+        fmt_tail = fmt_tail.replace("_"," ")
+    return fmt_head, rel, fmt_tail
 
 
 def format_relation(rel):
@@ -1366,12 +1462,12 @@ def get_local_data2(knn, k, te_head, te_tail, tr_heads, tr_tails, e2i, i2e):
 def get_local_data3(head, tail, tr_heads, tr_tails, embeddings, e2i, locality, mask):
     """ get # nearest neighbor TRIPLES in training set weighted by the embedding """
     # get weights for train heads/tails w.r.t. test head/tail
-    heads = np.insert(tr_heads, 0 , head)
+    heads = np.insert(tr_heads.astype("<U35"), 0 , head)
     head_embeddings = np.asarray([embeddings[e2i[h],:] for h in heads])
     dist, idxs = get_knn(head_embeddings)
     head_dists = [None] * len(heads)
     for i, h in enumerate(heads): head_dists[idxs[0,i]] = dist[0,i]
-    tails = np.insert(tr_tails, 0 , tail)
+    tails = np.insert(tr_tails.astype("<U35"), 0 , tail)
     tail_embeddings = np.asarray([embeddings[e2i[t],:] for t in tails])
     dist, idxs = get_knn(tail_embeddings)
     tail_dists = [None] * len(tails)
@@ -1392,8 +1488,6 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
         exp_json = []
     # DEBUG
     for rel, rel_id in r2i.items():
-        # if rel_id > 3:
-        #     break
     #     a. Load the extracted SFE features/labels
         print("Working on " + str(rel))
         train_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "train.tsv")

@@ -2,6 +2,8 @@ from argparse import Action
 import os
 import json
 from copy import copy
+
+from matplotlib import colors
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from math import log, sqrt
@@ -310,8 +312,8 @@ def plot_mline(xvalues, yvalues, names, colors, linestyles,
     return fig
 
 
-def plot_table(stats, row_labels, col_labels, title=None):
-    fig = plt.figure(figsize=(10, 6))
+def plot_table(stats, row_labels, col_labels, title=None, fmt_string="{:.4f}", figure_size=(10,6)):
+    fig = plt.figure(figsize=figure_size)
     axs = fig.add_subplot(1, 1, 1)
     fig.patch.set_visible(False)
     axs.axis('off')
@@ -321,7 +323,7 @@ def plot_table(stats, row_labels, col_labels, title=None):
     format_stats = copy(stats).astype(str)
     for i in range(format_stats.shape[0]):
         for j in range(format_stats.shape[1]):
-            format_stats[i,j] = "{:.4f}".format(stats[i,j])
+            format_stats[i,j] = fmt_string.format(stats[i,j])
 
     the_table = axs.table(cellText=format_stats, rowLabels=row_labels, colLabels=col_labels, loc='center')
     fig.tight_layout()
@@ -812,44 +814,245 @@ def global_plot(args):
     return [fig]
 
 
+class TurkerResult:
+    def __init__(self, amt_json):
+        self.user_id = amt_json["turkId"]
+        self.prac_data = amt_json["examples"]
+        self.gold_data = amt_json["test"][-1:]
+        # DEBUG
+        self.gold_data[0].append(0)
+        # DEBUG
+        self.test_id = int(amt_json["testId"])
+        self.test_data = amt_json["test"][:-1]
+        self.survey_data = amt_json["questionnaireData"]
+        self.prac_score = 0.0
+        self.gold_score = 0.0
+        self.test_score = 0.0
+
+    def eval_practice(self, answers):
+        self.prac_score = eval_questions(answers, self.prac_data)
+
+    def eval_test(self, answers):
+        self.test_score = eval_questions(answers, self.test_data)
+
+    def eval_gold(self, answers):
+        self.gold_score = eval_questions(answers, self.gold_data)
+
+
+class AmtTest:
+    def __init__(self, test_id, q_json):
+        self.test_id = test_id
+        self.qs, self.qas = self.parse_q_json(q_json)
+        self.turker_ids = []
+        self.turker_results = []
+
+    def parse_q_json(self, q_json):
+        qs = []
+        qas = []
+        for q in q_json:
+            q_str = []
+            qa_str = []
+            for q_part in q["parts"]:
+                options = [q_part["str_list"]]
+                options += q_part["corrections"] + [["None","of","above"]]
+                q_str.append(options)
+                qa_str.append([0,0,0,0,0])
+            possible_fact = copy(q["str_list"])
+            possible_fact[2] += " is False."
+            options = [possible_fact]
+            possible_fact = copy(q["str_list"])
+            possible_fact[2] += " is True."
+            options += [possible_fact]
+            q_str.append(options)
+            qa_str.append([0,0])
+            qs.append(q_str)
+            qas.append(qa_str)
+        return qs, qas
+    
+    def add_turker(self, turker_id, answers):
+        self.turker_ids.append(turker_id)
+        for i, q in enumerate(answers):
+            for j, answer in enumerate(q):
+                if j+1 == len(q):
+                    self.qas[i][j][answer] += 1
+                else:
+                    self.qas[i][j][answer+1] += 1
+
+
+def eval_questions(answers, data):
+    assert len(answers) == len(data)
+    num_q = 0
+    correct = 0
+    for i in range(len(answers)):
+        try:
+            assert len(answers[i])+1 == len(data[i])
+        except:
+            pdb.set_trace()
+        correct += np.count_nonzero(np.asarray(answers[i]) == np.asarray(data[i][:-1]))
+        if (np.all(np.asarray(answers[i])==-1) and data[i][-1]) or (np.any(np.asarray(answers[i])!=-1) and not data[i][-1]):
+            correct += 1
+        num_q += len(data[i])
+    return float(correct) / float(num_q)
+
+
+def plot_answer_tally(amt_tally):
+    figs = []
+    for test_id, test_tally in amt_tally.items():
+        for i, q in enumerate(test_tally.qs):
+            labels = []
+            vals = []
+            for j, q_part in enumerate(q):
+                for k, q_part_option in enumerate(q_part):
+                    labels.append(" ".join(q_part_option))
+                    vals.append(test_tally.qas[i][j][k])
+                labels.append(" ")
+                vals.append(0)
+            fig_title = "Practice Question" if test_id == -1 else "Test Question"
+            fig = plot_table(stats=np.asarray([vals]).T,
+                             row_labels=labels,
+                             col_labels=["Count"],
+                             fmt_string="{:.0f}",
+                             figure_size=(5, 6),
+                             title=fig_title)
+            figs.append(fig)
+    return figs
+
+
+def get_majority_score(args, tally, prac_json, test_json):
+    m_answers = []
+    for i, q in enumerate(tally[-1].qas):
+        m_answer = []
+        for j, q_part in enumerate(q):
+            if j+1 == len(q):
+                m_answer.append(np.argmax(q_part))
+            else:
+                m_answer.append(np.argmax(q_part)-1)
+        m_answers.append(m_answer)
+    prac_answers = [[part["correct_id"] for part in question['parts']] for question in prac_json]
+    prac_score = eval_questions(prac_answers, m_answers)
+
+    m_answers = []
+    tally_keys = sorted(list(tally.keys()))
+    del tally_keys[tally_keys.index(-1)]
+    for test_id in tally_keys:
+        for i, q in enumerate(tally[test_id].qas):
+            m_answer = []
+            for j, q_part in enumerate(q):
+                if j+1 == len(q):
+                    m_answer.append(np.argmax(q_part))
+                else:
+                    m_answer.append(np.argmax(q_part)-1)
+            m_answers.append(m_answer)
+    stop = int(args["plotting"]["num_examples"]) * (max(tally_keys)+1)
+    test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[:stop]]
+    test_score = eval_questions(test_answers, m_answers)
+    return prac_score, test_score
+
+
+def get_best_turker_score(args, tally, amt_data, test_json):
+    best_prac_score = max([amt_result.prac_score for amt_result in amt_data])
+
+    b_answers = []
+    tally_keys = sorted(list(tally.keys()))
+    del tally_keys[tally_keys.index(-1)]
+    for test_id in tally_keys:
+        test_turker_ids = tally[test_id].turker_ids
+        test_turkers = [amt_result for amt_result in amt_data if amt_result.user_id in test_turker_ids]
+        assert len(test_turkers) == 3
+        test_turker_practice_scores = [test_turker.prac_score for test_turker in test_turkers]
+        best_turker = test_turkers[np.argmax(test_turker_practice_scores)]
+        b_answers += best_turker.test_data
+    stop = int(args["plotting"]["num_examples"]) * (max(tally_keys)+1)
+    test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[:stop]]
+    best_test_score = eval_questions(test_answers, b_answers)
+    return best_prac_score, best_test_score
+
+
+def plot_exit_survey(amt_data):
+    ages = ["18-24","25-34","35-44","45-54","55+"]
+    ages_ = [0,0,0,0,0]
+    genders = ["Male","Female","Other"]
+    genders_ = [0,0,0]
+    exposures = ["Never","Rarely","Sometimes","Often"]
+    exposures_ = [0,0,0,0]
+    feedback = []
+    for amt_result in amt_data:
+        ages_[ages.index(amt_result.survey_data["age"])] += 1
+        genders_[genders.index(amt_result.survey_data["gender"])] += 1
+        exp = int(amt_result.survey_data["exposure"])-1 if type(amt_result.survey_data["exposure"]) == str else 0
+        exposures_[exp] += 1
+        feedback.append(amt_result.survey_data["feedback"])
+    figs = []
+    figs.append(plot_bar(ages_, ages, title="Turker Ages", colors=["r","b","g","c","m"]))
+    figs.append(plot_bar(genders_, genders, title="Turker Genders", colors=["r","b","g"]))
+    figs.append(plot_bar(exposures_, exposures, title="Turker Exposure", colors=["r","b","g","c"]))
+    figs.append(plot_table(np.asarray([np.arange(len(feedback))]).T, feedback, ["Feedback"]))
+    return figs
+
+
 def amt_plot(args):
     fp = os.path.join("explainable_kge/logger/logs", args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(args["logging"]["log_num"]))
     results_fp = os.path.join(os.path.abspath(fp), "results")
     locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
-    # load the corrupted json for testing
+    # load the testing json
     json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
     json_fp = os.path.join(results_fp, json_name + '.json')
     with open(json_fp, "r") as f:
-        exp_json = json.load(f)
-    # load the amt results
+        test_json = json.load(f)
+    # load the practice json
+    json_name = "examples"
+    json_fp = os.path.join(results_fp, json_name + '.json')
+    with open(json_fp, "r") as f:
+        prac_json = json.load(f)
+    prac_answers = [[part["correct_id"] for part in question['parts']] for question in prac_json]
+    gold_answers = [[part["correct_id"] for part in question['parts']] for question in prac_json[1:2]]
+    # load the amt results, tally answers, and score each turker individually
+    amt_data = []
+    amt_tally = {}
     amt_folder = "amt_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
     amt_fp = os.path.join(results_fp, amt_folder)
     amt_results_fps = [os.path.join(amt_fp, file) for file in os.listdir(amt_fp) if file.endswith(".json")]
-    amt_results = []
     for i, amt_results_fp in enumerate(amt_results_fps):
         with open(amt_results_fp, "r") as f:
-            amt_results.append(json.load(f))
-    # process amt results compared to correct
+            turker_data = TurkerResult(json.load(f))
+        turker_data.eval_practice(prac_answers)
+        if -1 in amt_tally:
+            amt_tally[-1].add_turker(turker_data.user_id, turker_data.prac_data)
+        else:
+            amt_tally[-1] = AmtTest(-1, prac_json)
+            amt_tally[-1].add_turker(turker_data.user_id, turker_data.prac_data)
+        # turker_data.eval_gold(gold_answers)
+        start = turker_data.test_id * int(args["plotting"]["num_examples"])
+        stop = start + int(args["plotting"]["num_examples"])
+        test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[start:stop]]
+        turker_data.eval_test(test_answers)
+        if turker_data.test_id in amt_tally:
+            amt_tally[turker_data.test_id].add_turker(turker_data.user_id, turker_data.test_data)
+        else:
+            amt_tally[turker_data.test_id] = AmtTest(turker_data.test_id, test_json[start:stop])
+            amt_tally[turker_data.test_id].add_turker(turker_data.user_id, turker_data.test_data)
+        amt_data.append(turker_data)
+    # make answer tally figures for practice and test
+    figs = plot_answer_tally(amt_tally)
+    # make individual, average, and majority vote performance figures
     correct_acc = []
-    for amt_result in amt_results:
-        fixed_corruptions = 0
-        total_corruptions = 0
-        start = amt_result["testId"] * args["plotting"]["num_examples"]
-        stop = start + args["plotting"]["num_examples"]
-        corrupt_answers = exp_json[start:stop]
-        for i in range(len(amt_result["test"])):
-            true_corrections = [part['correct_id'] for part in corrupt_answers[i]['parts']]
-            amt_corrections = amt_result["test"][i]
-            assert len(true_corrections) == len(amt_corrections)
-            fixed_corruptions += np.count_nonzero(np.asarray(true_corrections) == np.asarray(amt_corrections))
-            total_corruptions += len(true_corrections)
-        correct_acc.append(fixed_corruptions / total_corruptions)
-    print("Mean: " + str(np.mean(correct_acc)))
-    print("Std: " + str(np.std(correct_acc)))
-    fig = plot_table(stats=np.asarray([[np.mean(correct_acc), np.std(correct_acc)]]),
-                     row_labels=["AMT Test"],
-                     col_labels=["Mean", "Std"])
-    return [fig]
+    for amt_result in amt_data:
+        correct_acc.append([amt_result.prac_score, amt_result.test_score])
+    correct_acc = np.asarray(correct_acc)
+    correct_acc = np.append(correct_acc, [[np.mean(correct_acc[:,0]), np.mean(correct_acc[:,1])]], axis=0)
+    correct_acc = np.append(correct_acc, [[np.std(correct_acc[:,0]), np.std(correct_acc[:,1])]], axis=0)
+    m_prac, m_test = get_majority_score(args, amt_tally, prac_json, test_json)
+    correct_acc = np.append(correct_acc, [[m_prac, m_test]], axis=0)
+    b_prac, b_test = get_best_turker_score(args, amt_tally, amt_data, test_json)
+    correct_acc = np.append(correct_acc, [[b_prac, b_test]], axis=0)
+    fig = plot_table(stats=np.asarray(correct_acc),
+                     row_labels=np.arange(len(amt_data)).tolist() + ["Mean", "STD", "Majority Vote", "Best Practice"],
+                     col_labels=["Practice", "Test"],
+                     figure_size=(5,6))
+    figs.append(fig)
+    # make survey histogram figure
+    figs += plot_exit_survey(amt_data)
+    return figs
 
 
 if __name__ == "__main__":

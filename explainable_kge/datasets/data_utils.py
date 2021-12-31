@@ -11,6 +11,48 @@ from explainable_kge.logger.terminal_utils import logout
 import pdb
 
 
+def swap_ents(file1, file2):
+    ent_swap = {}
+    with open("ent_swaps.txt","r") as f:
+        for line in f:
+            ent, new_ent = line.strip().split(",")
+            ent_swap[ent] = new_ent
+    f1 = open(file1, 'r')
+    f2 = open(file2, 'w')
+    for line in f1:
+        head, tail, rel = line.split("\t")
+        head_type = head[-2:]
+        tail_type = tail[-2:]
+        if head[:-2] in ent_swap and tail[:-2] in ent_swap:
+            f2.write("\t".join([ent_swap[head[:-2]]+head_type,ent_swap[tail[:-2]]+tail_type,rel]))
+        elif head[:-2] in ent_swap:
+            f2.write("\t".join([ent_swap[head[:-2]]+head_type,tail,rel]))
+        elif tail[:-2] in ent_swap:
+            f2.write("\t".join([head,ent_swap[tail[:-2]]+tail_type,rel]))
+        else:
+            f2.write("\t".join([head,tail,rel]))
+
+def swap_ents2(file1, file2):
+    ent_swap = {}
+    with open("ent_swaps.txt","r") as f:
+        for line in f:
+            ent, new_ent = line.strip().split(",")
+            ent_swap[ent] = new_ent
+    f1 = open(file1, 'r')
+    f2 = open(file2, 'w')
+    for line in f1:
+        line_list = line.split("\t")
+        if len(line_list) == 1:
+            f2.write(line)
+            continue
+        ent, ent_id = line_list
+        ent_type = ent[-2:]
+        if ent[:-2] in ent_swap:
+            f2.write("\t".join([ent_swap[ent[:-2]]+ent_type,ent_id]))
+        else:
+            f2.write("\t".join([ent,ent_id]))
+
+
 class TripleDataset(Dataset):
     def __init__(self, dataset_name, neg_ratio=0, neg_type="random", reverse=False, model_name="tucker", session=0):
         """
@@ -298,10 +340,13 @@ class TripleDataset(Dataset):
                     hh = self.known_ents[np.random.randint(len(self.known_ents), dtype=np.int32)]
                 corrupted_triples = np.append(corrupted_triples, [[hh, r, t, -1]], axis=0)
             else:
-                if len(self.t_dom[(r,h)]):
-                    tt = self.t_dom[(r,h)][np.random.randint(len(self.t_dom[(r,h)]), dtype=np.int32)]
-                else:
-                    tt = self.known_ents[np.random.randint(len(self.known_ents), dtype=np.int32)]
+                try:
+                    if len(self.t_dom[(r,h)]):
+                        tt = self.t_dom[(r,h)][np.random.randint(len(self.t_dom[(r,h)]), dtype=np.int32)]
+                    else:
+                        tt = self.known_ents[np.random.randint(len(self.known_ents), dtype=np.int32)]
+                except:
+                    pdb.set_trace()
                 corrupted_triples = np.append(corrupted_triples, [[h, r, tt, -1]], axis=0)
         return corrupted_triples
 

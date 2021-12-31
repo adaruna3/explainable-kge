@@ -86,7 +86,7 @@ if __name__ == "__main__":
         g_hat = x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, max_nbrs, ghat_fp)
     else:
         g_hat = pd.read_csv(ghat_fp, sep="\t", header=None).to_numpy(dtype=str)
-    g_hat_dicts = x_utils.process_ghat(g_hat, tr_de_d.e2i, tr_de_d.r2i)
+    g_hat_dicts = x_utils.process_ghat(g_hat, tr_de_d.e2i, tr_de_d.i2e, tr_de_d.r2i, tr_de_d.i2r, tr_de_d.load_triples(["gt2id.txt"]))
     # 2. Run SFE on G^
     sfe_fp = os.path.join(exp_fp, "results")
     if not os.path.exists(os.path.join(sfe_fp,exp_config["model"]["name"])):
