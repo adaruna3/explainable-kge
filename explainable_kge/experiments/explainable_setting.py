@@ -37,6 +37,16 @@ def setup_experiment(args):
     tr_de_dataset.load_current_ents_rels()
     tr_de_dataset.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
 
+    # load the gt clean triples
+    dirty_ds_name = copy(args["dataset"]["name"])
+    clean_ds_name = dirty_ds_name.split("_")[0] + "_CLEAN_" + dirty_ds_name.split("_")[-1]
+    clean_args = copy(args)
+    clean_args["dataset"]["name"] = clean_ds_name
+    clean_args["dataset"]["set_name"] = "0_train2id"
+    clean_args["continual"]["session"] = 0
+    clean_dataset = model_utils.load_dataset(clean_args)
+    clean_triples = clean_dataset.load_triples(["0_gt2id.txt"], num_skip=0)
+
     # loads trained embedding model
     model_optim_args = copy(args)
     model_optim_args["model"]["num_ents"] = len(tr_dataset.e2i)
@@ -56,7 +66,8 @@ def setup_experiment(args):
         os.makedirs(fp)
     fp = os.path.abspath(fp)
 
-    return model, tr_de_dataset, fp
+    return model, tr_de_dataset, clean_triples, fp
+    # return model, tr_de_dataset, fp
 
 
 if __name__ == "__main__":
@@ -71,7 +82,8 @@ if __name__ == "__main__":
         exp_config["cuda"] = False
         logout("Running with CPU, experiments will be slow", "w")
     # prepare experiment objects
-    exp_model, tr_de_d, exp_fp = setup_experiment(exp_config)
+    exp_model, tr_de_d, clean_gt_triples, exp_fp = setup_experiment(exp_config)
+    # exp_model, tr_de_d, exp_fp = setup_experiment(exp_config)
     # 1. Generate G^
     #     a. For each training triple, perturb with NN to be all possible triples in G^
     ent_embeddings = exp_model.E.weight.cpu().detach().numpy()
@@ -86,7 +98,7 @@ if __name__ == "__main__":
         g_hat = x_utils.generate_ghat(exp_config, knn, tr_de_d, exp_model, rel_thresholds, device, max_nbrs, ghat_fp)
     else:
         g_hat = pd.read_csv(ghat_fp, sep="\t", header=None).to_numpy(dtype=str)
-    g_hat_dicts = x_utils.process_ghat(g_hat, tr_de_d.e2i, tr_de_d.i2e, tr_de_d.r2i, tr_de_d.i2r, tr_de_d.load_triples(["gt2id.txt"]))
+    g_hat_dicts = x_utils.process_ghat(g_hat, tr_de_d.e2i, tr_de_d.i2e, tr_de_d.r2i, tr_de_d.i2r, clean_gt_triples)
     # 2. Run SFE on G^
     sfe_fp = os.path.join(exp_fp, "results")
     if not os.path.exists(os.path.join(sfe_fp,exp_config["model"]["name"])):

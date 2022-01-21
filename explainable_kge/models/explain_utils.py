@@ -2,7 +2,7 @@ from enum import unique
 import os
 import multiprocessing
 import subprocess
-from copy import copy
+from copy import copy, deepcopy
 import itertools
 import pickle
 import json
@@ -146,6 +146,7 @@ def process_ghat(ghat, e2i, i2e, r2i, i2r, num_gt_triples):
         str_gt_triples.append([i2e[hi],i2r[ri],i2e[ti]])
     str_gt_triples = np.asarray(str_gt_triples)
     all_triples = np.unique(np.append(ghat, str_gt_triples, axis=0), axis=0)
+    # all_triples = ghat
     
     # convert ghat into usable lookup table
     valid_heads_rt = {}
@@ -183,23 +184,24 @@ def process_ghat(ghat, e2i, i2e, r2i, i2r, num_gt_triples):
     rel_tails = {}
     for row_id in range(all_triples.shape[0]):
         h, r, t = all_triples[row_id, :]
-        rel_heads[r] = []
-        rel_tails[r] = []
-
-    for row_id in range(all_triples.shape[0]):
-        h, r, t = all_triples[row_id,:]
+        if r not in rel_heads:
+            rel_heads[r] = []
+        if r not in rel_tails:
+            rel_tails[r] = []
         if h not in rel_heads[r]:
             rel_heads[r].append(h)
         if t not in rel_tails[r]:
             rel_tails[r].append(t)
+
     # assign the full domains
     h_dom = {}
     t_dom = {}
     for r in rel_heads.keys():
         for t in rel_tails[r]:
-            h_dom[(r,t)] = copy(rel_heads[r])
+            h_dom[(r,t)] = deepcopy(rel_heads[r])
         for h in rel_heads[r]:
-            t_dom[(r,h)] = copy(rel_tails[r])
+            t_dom[(r,h)] = deepcopy(rel_tails[r])
+    
     # remove all head/tails from relation domain in triples
     for row_id in range(all_triples.shape[0]):
         h, r, t = all_triples[row_id,:]
@@ -640,7 +642,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_h_i = valid_heads_rh[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
         if not len(connections): return False
-        if len(connections) == 1: return connections[0]
+        if len(connections) == 1: return connections
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
         fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
@@ -669,7 +671,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_h_i = valid_heads_rh[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
         if not len(connections): return False
-        if len(connections) == 1: return connections[0]
+        if len(connections) == 1: return connections
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
         fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
@@ -699,7 +701,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_h_i = valid_tails_rt[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
         if not len(connections): return False
-        if len(connections) == 1: return connections[0]
+        if len(connections) == 1: return connections
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
         fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
@@ -727,7 +729,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         bk_h_i = valid_tails_rt[(bk_r_i,bk_t_i)]
         connections = list(set(fr_t_i).intersection(set(bk_h_i)))
         if not len(connections): return False
-        if len(connections) == 1: return connections[0]
+        if len(connections) == 1: return connections
         bc = torch.tensor(connections, dtype=torch.long)
         fr_bh = torch.tensor(fr_h_i, dtype=torch.long).repeat(len(connections))
         fr_br = torch.tensor(fr_r_i, dtype=torch.long).repeat(len(connections))
@@ -754,7 +756,7 @@ def path_connection(args, fr_h_i, fr_r_str, bk_t_i, bk_r_str, ghat, r2i, i2e, mo
         sort_idxs = sort_idxs.cpu().numpy()
     else:
         sort_idxs = np.argsort(scores)
-    return connections[sort_idxs[0]]
+    return np.asarray(connections)[sort_idxs].tolist()
 
 
 def get_path_corrupt_parts(short_path):
@@ -793,9 +795,11 @@ def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_
         if corrupting_ends:
             # account for corrupting ends
             if end_rel[0] == "_":
-                incorrect_ents = list(set(incorrect_ents).union(set(t_dom[(end_rel[1:],end_tail)])))
+                if (end_rel[1:],end_tail) in t_dom:
+                    incorrect_ents = list(set(incorrect_ents).union(set(t_dom[(end_rel[1:],end_tail)])))
             else:
-                incorrect_ents = list(set(incorrect_ents).union(set(h_dom[(end_rel,end_tail)])))
+                if (end_rel,end_tail) in h_dom:
+                    incorrect_ents = list(set(incorrect_ents).union(set(h_dom[(end_rel,end_tail)])))
         if len(incorrect_ents):
             # rank according to likelihood of satisfying relationship
             bh = torch.tensor([e2i[ent] for ent in incorrect_ents], dtype=torch.long)
@@ -821,25 +825,29 @@ def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_
                     scores += scores_
                 sort_idxs = np.argsort(scores)
             all_bad_heads = np.asarray(incorrect_ents)[sort_idxs].tolist()
-            bad_heads = get_non_repeats(all_bad_heads, num_corrections)
+            bad_heads = get_non_repeats_end(all_bad_heads, num_corrections)
         else:
             bad_heads = []
         if len(bad_heads) < 3:
             # add least likely, invalid corrupt heads if needed
             possible_bad_heads = np.arange(len(e2i))
             if r[0] == "_":
-                valid_heads = valid_tails_rh[(r2i[r[1:]],e2i[t])]
-                possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+                if (r2i[r[1:]],e2i[t]) in valid_tails_rh:
+                    valid_heads = valid_tails_rh[(r2i[r[1:]],e2i[t])]
+                    possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
             else:
-                valid_heads = valid_heads_rt[(r2i[r],e2i[t])]
-                possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+                if (r2i[r],e2i[t]) in valid_heads_rt:
+                    valid_heads = valid_heads_rt[(r2i[r],e2i[t])]
+                    possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
             if corrupting_ends:
                 if end_rel[0] == "_":
-                    valid_heads = valid_tails_rh[(r2i[end_rel[1:]],e2i[end_tail])]
-                    possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+                    if (r2i[end_rel[1:]],e2i[end_tail]) in valid_tails_rh:
+                        valid_heads = valid_tails_rh[(r2i[end_rel[1:]],e2i[end_tail])]
+                        possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
                 else:
-                    valid_heads = valid_heads_rt[(r2i[end_rel],e2i[end_tail])]
-                    possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
+                    if (r2i[end_rel],e2i[end_tail]) in valid_heads_rt:
+                        valid_heads = valid_heads_rt[(r2i[end_rel],e2i[end_tail])]
+                        possible_bad_heads[np.isin(possible_bad_heads, valid_heads, invert=True)]
             # rank according to likelihood of satisfying relationship
             bh = torch.tensor(possible_bad_heads, dtype=torch.long)
             br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
@@ -864,7 +872,7 @@ def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_
                     scores += scores_
                 sort_idxs = np.argsort(scores)
             all_bad_heads = [i2e[e_id] for e_id in np.asarray(possible_bad_heads)[sort_idxs].tolist()] + bad_heads
-            bad_heads = get_non_repeats(all_bad_heads, num_corrections)
+            bad_heads = get_non_repeats_end(all_bad_heads, num_corrections)
         return bad_heads
     else:
         # corrupt tail with least likely, invalid, same type tails
@@ -875,9 +883,11 @@ def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_
         if corrupting_ends:
             # account for corrupting ends
             if end_rel[0] == "_":
-                incorrect_ents = list(set(incorrect_ents).union(set(h_dom[(end_rel[1:],end_head)])))
+                if (end_rel[1:],end_head) in h_dom:
+                    incorrect_ents = list(set(incorrect_ents).union(set(h_dom[(end_rel[1:],end_head)])))
             else:
-                incorrect_ents = list(set(incorrect_ents).union(set(t_dom[(end_rel,end_head)])))
+                if (end_rel,end_head) in t_dom:
+                    incorrect_ents = list(set(incorrect_ents).union(set(t_dom[(end_rel,end_head)])))
         # rank according to likelihood of satisfying relationship
         if len(incorrect_ents):
             bt = torch.tensor([e2i[ent] for ent in incorrect_ents], dtype=torch.long)
@@ -903,25 +913,29 @@ def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_
                     scores += scores_
                 sort_idxs = np.argsort(scores)
             all_bad_tails = np.asarray(incorrect_ents)[sort_idxs].tolist()
-            bad_tails = get_non_repeats(all_bad_tails, num_corrections)
+            bad_tails = get_non_repeats_end(all_bad_tails, num_corrections)
         else:
             bad_tails = []
         if len(bad_tails) < 3:
             # add least likely, invalid corrupt tails if needed
             possible_bad_tails = np.arange(len(e2i))
             if r[0] == "_":
-                valid_tails = valid_heads_rt[(r2i[r[1:]],e2i[h])]
-                possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+                if (r2i[r[1:]],e2i[h]) in valid_heads_rt:
+                    valid_tails = valid_heads_rt[(r2i[r[1:]],e2i[h])]
+                    possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
             else:
-                valid_tails = valid_tails_rh[(r2i[r],e2i[h])]
-                possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+                if (r2i[r],e2i[h]) in valid_tails_rh:
+                    valid_tails = valid_tails_rh[(r2i[r],e2i[h])]
+                    possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
             if corrupting_ends:
                 if end_rel[0] == "_":
-                    valid_tails = valid_heads_rt[(r2i[end_rel[1:]],e2i[end_head])]
-                    possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+                    if (r2i[end_rel[1:]],e2i[end_head]) in valid_heads_rt:
+                        valid_tails = valid_heads_rt[(r2i[end_rel[1:]],e2i[end_head])]
+                        possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
                 else:
-                    valid_tails = valid_tails_rh[(r2i[end_rel],e2i[end_head])]
-                    possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
+                    if (r2i[end_rel],e2i[end_head]) in valid_tails_rh:
+                        valid_tails = valid_tails_rh[(r2i[end_rel],e2i[end_head])]
+                        possible_bad_tails[np.isin(possible_bad_tails, valid_tails, invert=True)]
             # rank according to likelihood of satisfying relationship
             bt = torch.tensor(possible_bad_tails, dtype=torch.long)
             br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
@@ -946,11 +960,176 @@ def get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_
                     scores += scores_
                 sort_idxs = np.argsort(scores)
             all_bad_tails = [i2e[e_id] for e_id in np.asarray(possible_bad_tails)[sort_idxs].tolist()] + bad_tails
-            bad_tails = get_non_repeats(all_bad_tails, num_corrections)
+            bad_tails = get_non_repeats_end(all_bad_tails, num_corrections)
         return bad_tails
 
 
-def get_non_repeats(ent_list, num_corrupt=3):
+def get_other_ents(args, correct_part, ghat, e2i, i2e, r2i, head_flag, corrupting_ends, end_head, end_rel, end_tail, model, device, num_corrections=3):
+    valid_heads_rt, valid_heads_r, valid_tails_rh, valid_tails_r, _, _ = ghat
+    h, r, t = correct_part
+    if head_flag:
+        filter_heads = [h, end_head] if corrupting_ends else [h]
+        # corrupt head with most likely, valid, same type heads
+        if r[0] == "_":
+            incorrect_ents = valid_tails_rh[(r2i[r[1:]],e2i[t])]
+        else:
+            incorrect_ents = valid_heads_rt[(r2i[r],e2i[t])]
+        if corrupting_ends:
+            # account for corrupting ends
+            if end_rel[0] == "_":
+                if (r2i[end_rel[1:]],e2i[end_tail]) in valid_tails_rh:
+                    incorrect_ents = list(set(incorrect_ents).union(set(valid_tails_rh[(r2i[end_rel[1:]],e2i[end_tail])])))
+            else:
+                if (r2i[end_rel],e2i[end_tail]) in valid_heads_rt:
+                    incorrect_ents = list(set(incorrect_ents).union(set(valid_heads_rt[(r2i[end_rel],e2i[end_tail])])))
+        if len(incorrect_ents):
+            # rank according to likelihood of satisfying relationship
+            bh = torch.tensor(incorrect_ents, dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
+            bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_heads = [i2e[e_id] for e_id in np.asarray(incorrect_ents)[sort_idxs].tolist()]
+            bad_heads = get_non_repeats_front(all_bad_heads, num_corrections, filter_heads)
+        else:
+            bad_heads = []
+        if len(bad_heads) < 3:
+            # add most likely, valid corrupt heads if needed
+            if r[0] == "_":
+                possible_bad_heads = valid_tails_r[r2i[r[1:]]]
+            else:
+                possible_bad_heads = valid_heads_r[r2i[r]]
+            if corrupting_ends:
+                if end_rel[0] == "_":
+                    possible_bad_heads = list(set(possible_bad_heads).union(set(valid_tails_r[r2i[end_rel[1:]]])))
+                else:
+                    possible_bad_heads = list(set(possible_bad_heads).union(set(valid_heads_r[r2i[end_rel]])))
+            # rank according to likelihood of satisfying relationship
+            bh = torch.tensor(possible_bad_heads, dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bh))
+            bt = torch.tensor(e2i[t], dtype=torch.long).repeat(len(bh))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends:
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bh))
+                    bt = torch.tensor(e2i[end_tail], dtype=torch.long).repeat(len(bh))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_heads = bad_heads + [i2e[e_id] for e_id in np.asarray(possible_bad_heads)[sort_idxs].tolist()]
+            bad_heads = get_non_repeats_front(all_bad_heads, num_corrections, filter_heads)
+        return bad_heads
+    else:
+        filter_tails = [t, end_tail] if corrupting_ends else [t]
+        # corrupt tail with most likely, valid, same type tails
+        if r[0] == "_":
+            incorrect_ents = valid_heads_rt[(r2i[r[1:]],e2i[h])]
+        else:
+            incorrect_ents = valid_tails_rh[(r2i[r],e2i[h])]
+        if corrupting_ends:
+            # account for corrupting ends
+            if end_rel[0] == "_":
+                if (r2i[end_rel[1:]],e2i[end_head]) in valid_heads_rt:
+                    incorrect_ents = list(set(incorrect_ents).union(set(valid_heads_rt[(r2i[end_rel[1:]],e2i[end_head])])))
+            else:
+                if (r2i[end_rel],e2i[end_head]) in valid_tails_rh:
+                    incorrect_ents = list(set(incorrect_ents).union(set(valid_tails_rh[(r2i[end_rel],e2i[end_head])])))
+        # rank according to likelihood of satisfying relationship
+        if len(incorrect_ents):
+            bt = torch.tensor(incorrect_ents, dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
+            bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_tails = [i2e[e_id] for e_id in np.asarray(incorrect_ents)[sort_idxs].tolist()]
+            bad_tails = get_non_repeats_front(all_bad_tails, num_corrections, filter_tails)
+        else:
+            bad_tails = []
+        if len(bad_tails) < 3:
+            # add least likely, valid corrupt tails if needed
+            if r[0] == "_":
+                possible_bad_tails = valid_heads_r[r2i[r[1:]]]
+            else:
+                possible_bad_tails = valid_tails_r[r2i[r]]
+            if corrupting_ends:
+                if end_rel[0] == "_":
+                    possible_bad_tails = list(set(possible_bad_tails).union(set(valid_heads_r[r2i[end_rel[1:]]])))
+                else:
+                    possible_bad_tails = list(set(possible_bad_tails).union(set(valid_tails_r[r2i[end_rel]])))
+            # rank according to likelihood of satisfying relationship
+            bt = torch.tensor(possible_bad_tails, dtype=torch.long)
+            br = torch.tensor(r2i[r.replace("_","")], dtype=torch.long).repeat(len(bt))
+            bh = torch.tensor(e2i[h], dtype=torch.long).repeat(len(bt))
+            if args["model"]["name"] == "tucker":
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                scores = scores[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device))
+                    scores_ = scores_[torch.arange(0, len(bh), device=device, dtype=torch.long), bt]
+                    scores += scores_
+                _, sort_idxs = torch.sort(scores, descending=True)
+                sort_idxs = sort_idxs.cpu().detach().numpy()
+            else:
+                scores = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                if corrupting_ends: # corrupting last tail, account for that
+                    br = torch.tensor(r2i[end_rel.replace("_","")], dtype=torch.long).repeat(len(bt))
+                    bh = torch.tensor(e2i[end_head], dtype=torch.long).repeat(len(bt))
+                    scores_ = model.predict(bh.contiguous().to(device), br.contiguous().to(device), bt.contiguous().to(device)).cpu().detach().numpy()
+                    scores += scores_
+                sort_idxs = np.argsort(scores)
+            all_bad_tails = bad_tails + [i2e[e_id] for e_id in np.asarray(possible_bad_tails)[sort_idxs].tolist()]
+            bad_tails = get_non_repeats_front(all_bad_tails, num_corrections, filter_tails)
+        return bad_tails
+
+
+def get_non_repeats_end(ent_list, num_corrupt=3):
     if len(ent_list) <= num_corrupt:
         # remove repeats from small list (inefficiently)
         i = len(ent_list) - 1
@@ -985,8 +1164,42 @@ def get_non_repeats(ent_list, num_corrupt=3):
         return ent_list_norepeat
 
 
+def get_non_repeats_front(ent_list, num_corrupt=3, filter_ents=[]):
+    filter_names = [ent[:-2] for ent in filter_ents]
+    ent_list_filtered = [ent for ent in ent_list if ent[:-2] not in filter_names]
+    if len(ent_list_filtered) <= num_corrupt:
+        # remove repeats from small list (inefficiently)
+        i = 0
+        while i < len(ent_list_filtered):
+            j = i + 1
+            while j < len(ent_list_filtered):
+                if ent_list_filtered[i][:-2] == ent_list_filtered[j][:-2]:
+                    del ent_list_filtered[j]
+                else:
+                    j += 1
+            i += 1
+        return ent_list_filtered
+    else:
+        # find 3 non-repeating ents (inefficiently)
+        ent_list_norepeat = [ent_list_filtered[0]]
+        i = 1
+        while len(ent_list_norepeat) < 3 and i < len(ent_list_filtered):
+            j = 0
+            skip = False
+            while j < len(ent_list_norepeat):
+                if ent_list_norepeat[j][:-2] == ent_list_filtered[i][:-2]:
+                    i += 1
+                    skip = True
+                    break
+                else:
+                    j += 1
+            if not skip:
+                ent_list_norepeat.append(ent_list_filtered[i])
+                i += 1
+        return ent_list_norepeat
+
+
 def fmt_corrupt_part(args, head, rel, tail, correct_path, corrupt_ids, ghat, e2i, i2e, r2i, model, device):
-    _, _, _, _, h_dom, t_dom = ghat
     corrupt_path = []
     prev_tail = None
     num_corrupt = 3
@@ -1042,19 +1255,26 @@ def fmt_corrupt_part(args, head, rel, tail, correct_path, corrupt_ids, ghat, e2i
             corrupt_part["str_list"] = format_triple_list(h,r,t)
             flag = np.random.randint(0,2)
             corrupt_part["colors"] = ["r","b","b"] if (flag == 1 and r not in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]) or (flag == 0 and r in ["_ObjCanBe", "_ObjhasState", "_OperatesOn"]) else ["b","b","r"]
-            bad_ents = get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, flag, part_id+1 == len(correct_path), head, rel, tail, model, device, num_corrupt)
-            if flag:
-                corrections = [format_triple_list(bad_h, r, t) for bad_h in bad_ents]
+            if args["explain"]["corrupt_json"]:
+                options = get_bad_ents(args, correct_part, ghat, e2i, i2e, r2i, flag, part_id == 0 or part_id+1 == len(correct_path), head, rel, tail, model, device, num_corrupt)
             else:
-                corrections = [format_triple_list(h, r, bad_t) for bad_t in bad_ents]
+                options = get_other_ents(args, correct_part, ghat, e2i, i2e, r2i, flag, part_id == 0 or part_id+1 == len(correct_path), head, rel, tail, model, device, num_corrupt)
+            if flag:
+                corrections = [format_triple_list(option, r, t) for option in options]
+                correction_triples = [",".join([option,r,t]) for option in options]
+            else:
+                corrections = [format_triple_list(h, r, option) for option in options]
+                correction_triples = [",".join([h,r,option]) for option in options]
             corrupt_part["corrections"] = corrections
             corrupt_part["correct_id"] = -1
+            if not args["explain"]["corrupt_json"]:
+                corrupt_part["correction_triples"] = correction_triples
             prev_tail = None
         corrupt_path.append(corrupt_part)
     return corrupt_path
 
 
-def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
+def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, true_label, model, ghat, e2i, i2e, r2i, device):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + "_gnd"
@@ -1086,26 +1306,23 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
                                                                          model, device)
         fr_id, bk_id = order_possible_paths(args, gnd_paths_fr_scores, gnd_paths_bk_scores)
         pair_idx = -1
-        # attempts to form complete grounded explanation path
-        joint_ent = False
-        while not joint_ent and pair_idx < len(fr_id)-1:
+        # attempts to form all complete grounded explanation paths in order of likelihood
+        while pair_idx < len(fr_id)-1:
             pair_idx += 1
             lh, rt = get_connection_ends(head, gnd_paths_fr, fr_id[pair_idx], tail, gnd_paths_bk, bk_id[pair_idx])
-            joint_ent = path_connection(args, e2i[lh], path[fr_hops], e2i[rt], path[bk_hops], ghat, r2i, i2e, model, device)
-        if not joint_ent:
-            logout("Failed to find grounded explanation for {} and {} following: {}".format(head, tail, str(path)),"w")
-            gnd_paths.append("Failed to find grounded explanation for {} and {} following: {}".format(head, tail, str(path)))
-        else:
-            connection = [[lh,path[fr_hops],i2e[joint_ent]],[i2e[joint_ent],path[bk_hops],rt]]
-            if fr_id[pair_idx] is None:
-                gnd_path_fr = []
-            else:
-                gnd_path_fr = gnd_paths_fr[fr_id[pair_idx]]
-            if bk_id[pair_idx] is None:
-                gnd_path_bk = []
-            else:
-                gnd_path_bk = gnd_paths_bk[bk_id[pair_idx]]
-            gnd_paths.append(gnd_path_fr + connection + gnd_path_bk)
+            joint_ents = path_connection(args, e2i[lh], path[fr_hops], e2i[rt], path[bk_hops], ghat, r2i, i2e, model, device)
+            if joint_ents:
+                for joint_ent in joint_ents:
+                    connection = [[lh,path[fr_hops],i2e[joint_ent]],[i2e[joint_ent],path[bk_hops],rt]]
+                    if fr_id[pair_idx] is None:
+                        gnd_path_fr = []
+                    else:
+                        gnd_path_fr = gnd_paths_fr[fr_id[pair_idx]]
+                    if bk_id[pair_idx] is None:
+                        gnd_path_bk = []
+                    else:
+                        gnd_path_bk = gnd_paths_bk[bk_id[pair_idx]]
+                    gnd_paths.append(gnd_path_fr + connection + gnd_path_bk)
     # stores the grounded explanation for debug
     explanation_df = pd.DataFrame(columns=["explanation","head","tail","y_logit","y_hat"])
     explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)
@@ -1118,40 +1335,42 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
             short_path = remove_redundancies(path)
             path_str, fmt_path = format_path(short_path)
             # only test path where BB and XM agree, and path is not a repeat of predicted triple
-            if label == pred and pred == 1 and (len(short_path) > 1 or short_path[0][1].replace("_","") != rel.replace("_","")):
-                # prepare for path corruption
-                if args["explain"]["corrupt_json"]:
-                    corrupt_parts = get_path_corrupt_parts(short_path)
-                exp = {"y_bb": str(label), "y_xm": str(pred), "parts": []}
-                # corrupt corrupt_parts of path
-                exp["parts"] = fmt_corrupt_part(args, head, rel, tail, short_path, corrupt_parts, ghat, e2i, i2e, r2i, model, device)
-                # set predicted triple, accounting for new corruptions
-                if 0 in corrupt_parts and len(short_path) in corrupt_parts:
-                    fmt_bad_head = exp["parts"][0]["fact_corrupted"].split(",")[0]
-                    fmt_bad_tail = exp["parts"][-1]["fact_corrupted"].split(",")[-1]
-                    exp["str"] = format_triple(fmt_bad_head, rel, fmt_bad_tail)
-                    exp["str_list"] = format_triple_list(fmt_bad_head, rel, fmt_bad_tail)
-                    exp["fact_corrupted"] = ",".join([fmt_bad_head, rel, fmt_bad_tail])
-                    exp["fact"] = ",".join([head, rel, tail])
-                elif 0 in corrupt_parts: # head needs to be first path head, which was corrupted
-                    fmt_bad_head = exp["parts"][0]["fact_corrupted"].split(",")[0]
-                    exp["str"] = format_triple(fmt_bad_head, rel, tail)
-                    exp["str_list"] = format_triple_list(fmt_bad_head, rel, tail)
-                    exp["fact_corrupted"] = ",".join([fmt_bad_head, rel, tail])
-                    exp["fact"] = ",".join([head, rel, tail])
-                elif len(short_path) in corrupt_parts: # tail needs to be last path tail, which was corrupted
-                    fmt_bad_tail = exp["parts"][-1]["fact_corrupted"].split(",")[-1]
-                    exp["str"] = format_triple(head, rel, fmt_bad_tail)
-                    exp["str_list"] = format_triple_list(head, rel, fmt_bad_tail)
-                    exp["fact_corrupted"] = ",".join([head, rel, fmt_bad_tail])
-                    exp["fact"] = ",".join([head, rel, tail])
-                else: # neither first head, nor last tail of path were corrupted
-                    exp["str"] = format_triple(head, rel, tail)
-                    exp["str_list"] = format_triple_list(head, rel, tail)
-                    exp["fact_corrupted"] = ",".join([head, rel, tail])
-                    exp["fact"] = ",".join([head, rel, tail])
-                # store the example predict triple/path combo
-                exp_json.append(exp)
+            # if label == pred and pred == 1 and (len(short_path) > 1 or short_path[0][1].replace("_","") != rel.replace("_","")):
+            # prepare for path corruption
+            if args["explain"]["corrupt_json"]:
+                corrupt_parts = get_path_corrupt_parts(short_path)
+            else:
+                corrupt_parts = []
+            exp = {"y_bb": str(label), "y_xm": str(pred), "parts": []}
+            # corrupt corrupt_parts of path
+            exp["parts"] = fmt_corrupt_part(args, head, rel, tail, short_path, corrupt_parts, ghat, e2i, i2e, r2i, model, device)
+            # set predicted triple, accounting for new corruptions
+            if 0 in corrupt_parts and len(short_path) in corrupt_parts:
+                fmt_bad_head = exp["parts"][0]["fact_corrupted"].split(",")[0]
+                fmt_bad_tail = exp["parts"][-1]["fact_corrupted"].split(",")[-1]
+                exp["str"] = format_triple(fmt_bad_head, rel, fmt_bad_tail)
+                exp["str_list"] = format_triple_list(fmt_bad_head, rel, fmt_bad_tail)
+                exp["fact_corrupted"] = ",".join([fmt_bad_head, rel, fmt_bad_tail])
+                exp["fact"] = ",".join([head, rel, tail])
+            elif 0 in corrupt_parts: # head needs to be first path head, which was corrupted
+                fmt_bad_head = exp["parts"][0]["fact_corrupted"].split(",")[0]
+                exp["str"] = format_triple(fmt_bad_head, rel, tail)
+                exp["str_list"] = format_triple_list(fmt_bad_head, rel, tail)
+                exp["fact_corrupted"] = ",".join([fmt_bad_head, rel, tail])
+                exp["fact"] = ",".join([head, rel, tail])
+            elif len(short_path) in corrupt_parts: # tail needs to be last path tail, which was corrupted
+                fmt_bad_tail = exp["parts"][-1]["fact_corrupted"].split(",")[-1]
+                exp["str"] = format_triple(head, rel, fmt_bad_tail)
+                exp["str_list"] = format_triple_list(head, rel, fmt_bad_tail)
+                exp["fact_corrupted"] = ",".join([head, rel, fmt_bad_tail])
+                exp["fact"] = ",".join([head, rel, tail])
+            else: # neither first head, nor last tail of path were corrupted
+                exp["str"] = format_triple(head, rel, tail)
+                exp["str_list"] = format_triple_list(head, rel, tail)
+                exp["fact_corrupted"] = ",".join([head, rel, tail])
+                exp["fact"] = ",".join([head, rel, tail])
+            # store the example predict triple/path combo
+            exp_json.append(exp)
         explanation_df = explanation_df.append({"explanation": path_str}, ignore_index=True)
     explanation_df.to_csv(os.path.join(ex_fp, file_name + '.tsv'), sep='\t')
     return exp_json
@@ -1486,6 +1705,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
     results = pd.DataFrame(columns=["rel", "sample", "label", "predict", "train_size", "params"])
     if args["explain"]["ground_explanations"]:
         exp_json = []
+    train_df, dev_df, test_df = load_datasets_to_dataframes(args)
     # DEBUG
     for rel, rel_id in r2i.items():
     #     a. Load the extracted SFE features/labels
@@ -1586,11 +1806,12 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                     best_params = str(xmodel.get_params())
             prediction = xmodel.predict(test_x[test_idx]).item()
             if args["explain"]["xmodel"] == "logit":
-                paths = get_logit_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx])
+                paths = get_logit_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_head, te_tail, prediction, te_y[test_idx])
             else:
-                paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], args["explain"]["save_tree"])
+                paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_head, te_tail, prediction, te_y[test_idx], args["explain"]["save_tree"])
             if args["explain"]["ground_explanations"]:
-                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_heads[test_idx], te_tails[test_idx], prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
+                true_label = test_df.loc[(test_df[1] == rel_id) & (test_df[0] == e2i[te_head]) & (test_df[2] == e2i[te_tail])][3].values[0]
+                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_head, te_tail, prediction, te_y[test_idx], true_label, kg_embedding, ghat, e2i, i2e, r2i, device)
                 exp_json += exp
             results = results.append({"rel": rel,
                                       "sample": test_pair,
@@ -1615,7 +1836,8 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
         for r, r_id in r2i.items():
             print(r + ": " + str(rel_counts[r_id]))
         locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
-        json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
+        corrupt_str = "corrupted" if args["explain"]["corrupt_json"] else "clean"
+        json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str
         json_fp = os.path.join(sfe_fp, json_name + '.json')
         with open(json_fp, "w") as f:
             random.shuffle(exp_json)

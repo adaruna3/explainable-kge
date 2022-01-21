@@ -31,7 +31,7 @@ def setup_experiment(args):
         viz = ProcessorViz(viz_args)
     else:
         viz_args = copy(args)
-        viz_args.tag = os.path.basename(__main__.__file__).split(".")[0]
+        viz_args["logging"]["tag"]= os.path.basename(__main__.__file__).split(".")[0]
         viz = AbstractProcessorViz(viz_args)
 
     # initializes a single model and optimizer used by all batch processors

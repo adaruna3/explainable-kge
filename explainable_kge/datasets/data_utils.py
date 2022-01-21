@@ -11,6 +11,22 @@ from explainable_kge.logger.terminal_utils import logout
 import pdb
 
 
+"""
+swap_ents("0_train.txt","0_train2.txt")
+swap_ents("0_test.txt","0_test2.txt")
+swap_ents("0_valid.txt","0_valid2.txt")
+swap_ents2("0_entity2id.txt","0_entity2id2.txt")
+
+mv 0_train.txt 0_train.bkp
+mv 0_train2.txt 0_train.txt
+mv 0_valid.txt 0_valid.bkp
+mv 0_valid2.txt 0_valid.txt
+mv 0_test.txt 0_test.bkp
+mv 0_test2.txt 0_test.txt
+mv 0_entity2id.txt 0_entity2id.bkp
+mv 0_entity2id2.txt 0_entity2id.txt
+"""
+
 def swap_ents(file1, file2):
     ent_swap = {}
     with open("ent_swaps.txt","r") as f:
@@ -20,17 +36,17 @@ def swap_ents(file1, file2):
     f1 = open(file1, 'r')
     f2 = open(file2, 'w')
     for line in f1:
-        head, tail, rel = line.split("\t")
+        head, tail, rel,label = line.split("\t")
         head_type = head[-2:]
         tail_type = tail[-2:]
         if head[:-2] in ent_swap and tail[:-2] in ent_swap:
-            f2.write("\t".join([ent_swap[head[:-2]]+head_type,ent_swap[tail[:-2]]+tail_type,rel]))
+            f2.write("\t".join([ent_swap[head[:-2]]+head_type,ent_swap[tail[:-2]]+tail_type,rel,label]))
         elif head[:-2] in ent_swap:
-            f2.write("\t".join([ent_swap[head[:-2]]+head_type,tail,rel]))
+            f2.write("\t".join([ent_swap[head[:-2]]+head_type,tail,rel,label]))
         elif tail[:-2] in ent_swap:
-            f2.write("\t".join([head,ent_swap[tail[:-2]]+tail_type,rel]))
+            f2.write("\t".join([head,ent_swap[tail[:-2]]+tail_type,rel,label]))
         else:
-            f2.write("\t".join([head,tail,rel]))
+            f2.write("\t".join([head,tail,rel,label]))
 
 def swap_ents2(file1, file2):
     ent_swap = {}
@@ -126,7 +142,7 @@ class TripleDataset(Dataset):
         if self.model_name == "tucker":
             self.reload_er_vocab()
 
-    def load_triples(self, triples_files):
+    def load_triples(self, triples_files, num_skip=1):
         """
         loads all triples in the triples file
         :param triples_file: contains triples for train, valid, or test
@@ -135,7 +151,7 @@ class TripleDataset(Dataset):
         triples = np.ndarray(shape=(0, 3), dtype=int)
         for triples_file in triples_files:
             try:
-                file_triples = pd.read_csv(self.fp + triples_file, sep=" |,|\t", skiprows=1, header=None,
+                file_triples = pd.read_csv(self.fp + triples_file, sep=" |,|\t", skiprows=num_skip, header=None,
                                      dtype={0: np.int32, 1: np.int32, 2: np.int32}, engine="python").to_numpy()
                 file_triples[:, [1, 2]] = file_triples[:, [2, 1]]
                 if self.reverse:
@@ -152,7 +168,7 @@ class TripleDataset(Dataset):
         return triples
 
     def load_corrupt_domains(self):
-        all_triples = self.load_triples(["gt2id.txt"])
+        all_triples = self.load_triples([str(self.session) + "_gt2id.txt"], num_skip=0)
         # get full head/tail domain for relations
         rel_heads = {r: [] for r in self.i2r.keys()}
         rel_tails = {r: [] for r in self.i2r.keys()}
@@ -334,14 +350,17 @@ class TripleDataset(Dataset):
             prob = 0.5
         for i in range(num):
             if np.random.uniform() < prob:
-                if len(self.h_dom[(r,t)]):
-                    hh = self.h_dom[(r,t)][np.random.randint(len(self.h_dom[(r,t)]), dtype=np.int32)]
-                else:
-                    hh = self.known_ents[np.random.randint(len(self.known_ents), dtype=np.int32)]
+                try:
+                    if (r,t) in self.h_dom and len(self.h_dom[(r,t)]):
+                        hh = self.h_dom[(r,t)][np.random.randint(len(self.h_dom[(r,t)]), dtype=np.int32)]
+                    else:
+                        hh = self.known_ents[np.random.randint(len(self.known_ents), dtype=np.int32)]
+                except:
+                    pdb.set_trace()
                 corrupted_triples = np.append(corrupted_triples, [[hh, r, t, -1]], axis=0)
             else:
                 try:
-                    if len(self.t_dom[(r,h)]):
+                    if (r,h) in self.t_dom and len(self.t_dom[(r,h)]):
                         tt = self.t_dom[(r,h)][np.random.randint(len(self.t_dom[(r,h)]), dtype=np.int32)]
                     else:
                         tt = self.known_ents[np.random.randint(len(self.known_ents), dtype=np.int32)]

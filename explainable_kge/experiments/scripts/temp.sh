@@ -1,0 +1,11 @@
+#!/bin/sh
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_ran.yaml --options "{'dataset': {'name':'VH+_CORR_RAN_DENOISED_100_CORRECTED_0'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_ran.yaml --options "{'dataset': {'name':'VH+_CORR_RAN_DENOISED_50_CORRECTED_50'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_ran.yaml --options "{'dataset': {'name':'VH+_CORR_RAN_DENOISED_100_CORRECTED_50'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_ran.yaml --options "{'dataset': {'name':'VH+_CORR_RAN_DENOISED_100_CORRECTED_100'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_ran.yaml --options "{'dataset': {'name':'VH+_CORR_RAN_GT_DENOISED_100_CORRECTED_100'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_obj.yaml --options "{'dataset': {'name':'VH+_CORR_OBJ_DENOISED_100_CORRECTED_0'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_obj.yaml --options "{'dataset': {'name':'VH+_CORR_OBJ_DENOISED_50_CORRECTED_50'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_obj.yaml --options "{'dataset': {'name':'VH+_CORR_OBJ_DENOISED_100_CORRECTED_50'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_obj.yaml --options "{'dataset': {'name':'VH+_CORR_OBJ_DENOISED_100_CORRECTED_100'}}"
+python explainable_kge/experiments/standard_setting.py --config_file explainable_kge/experiments/configs/std_tucker_dt_vh+_corr_obj.yaml --options "{'dataset': {'name':'VH+_CORR_OBJ_GT_DENOISED_100_CORRECTED_100'}}"

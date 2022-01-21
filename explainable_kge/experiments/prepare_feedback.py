@@ -96,22 +96,50 @@ if __name__ == "__main__":
     # get unique json corrupted facts
     updates = []
     for example in corr_json:
-        h,r,t = example["fact"].split(",")
+        split_fact = example["fact"].split(",")
+        r = split_fact[1]
+        if r[0] == "_":
+            h = split_fact[-1]
+            t = split_fact[0]
+        else:
+            h = split_fact[0]
+            t = split_fact[-1]
         hi = tr_d.e2i[h]
         ri = tr_d.r2i[r.replace("_","")]
         ti = tr_d.e2i[t]
-        h_,r_,t_ = example["fact_corrupted"].split(",")
+        split_fact_ = example["fact_corrupted"].split(",")
+        r_ = split_fact_[1]
+        if r_[0] == "_":
+            h_ = split_fact_[-1]
+            t_ = split_fact_[0]
+        else:
+            h_ = split_fact_[0]
+            t_ = split_fact_[-1]
         hi_ = tr_d.e2i[h_]
         ri_ = tr_d.r2i[r_.replace("_","")]
         ti_ = tr_d.e2i[t_]
         updates.append([hi,ri,ti,hi_,ri_,ti_])
         for part in example["parts"]:
             if part["correct_id"] != -1:
-                h,r,t = part["fact"].split(",")
+                split_fact = part["fact"].split(",")
+                r = split_fact[1]
+                if r[0] == "_":
+                    h = split_fact[-1]
+                    t = split_fact[0]
+                else:
+                    h = split_fact[0]
+                    t = split_fact[-1]
                 hi = tr_d.e2i[h]
                 ri = tr_d.r2i[r.replace("_","")]
                 ti = tr_d.e2i[t]
-                h_,r_,t_ = part["fact_corrupted"].split(",")
+                split_fact_ = part["fact_corrupted"].split(",")
+                r_ = split_fact_[1]
+                if r_[0] == "_":
+                    h_ = split_fact_[-1]
+                    t_ = split_fact_[0]
+                else:
+                    h_ = split_fact_[0]
+                    t_ = split_fact_[-1]
                 hi_ = tr_d.e2i[h_]
                 ri_ = tr_d.r2i[r_.replace("_","")]
                 ti_ = tr_d.e2i[t_]
@@ -131,7 +159,15 @@ if __name__ == "__main__":
         if not any(np.equal(de_triples,update[0:3]).all(1)) and not any(np.equal(de_triples,update[3:]).all(1)):
             nontede_updates.append(update.tolist())
     nontede_updates = np.asarray(nontede_updates)
+    # report corruptions
+    rel_counts = [0 for _ in tr_d.r2i.keys()]
+    for update in nontede_updates:
+        rel_counts[update[1]] += 1
+    print("Number of corruptions per relation type:")
+    for r, r_id in tr_d.r2i.items():
+        print(r + ": " + str(rel_counts[r_id]))
     tr_triples = tr_d.triples
+    gt_triples = tr_d.load_triples(["gt2id.txt"])
     # generate dataset with 100% corrupions
     # first delete sampled triples
     mask = np.zeros(shape=(tr_triples.shape[0]), dtype=bool)
@@ -141,8 +177,16 @@ if __name__ == "__main__":
     # then add corrupted triples
     new_triples = np.unique(nontede_updates[:,3:], axis=0)
     tr_triples_updated_ = np.append(tr_triples_updated, new_triples, axis=0)
+    # first delete sampled triples
+    mask = np.zeros(shape=(gt_triples.shape[0]), dtype=bool)
+    for update in nontede_updates:
+        mask = mask | np.equal(gt_triples, update[0:3]).all(1)
+    gt_triples_updated = np.delete(gt_triples, mask, axis=0)
+    # then add corrupted triples
+    gt_triples_updated_ = np.append(gt_triples_updated, new_triples, axis=0)
     # output the fully corrupted dataset
     tr_triples_updated_[:, [1, 2]] = tr_triples_updated_[:, [2, 1]]
+    gt_triples_updated_[:, [1, 2]] = gt_triples_updated_[:, [2, 1]]
     original_dataset_fp = tr_d.fp[:-1]
     fully_corrupted_dataset_fp = original_dataset_fp + "_CORR_100"
     if not os.path.exists(fully_corrupted_dataset_fp):
@@ -156,6 +200,11 @@ if __name__ == "__main__":
             for triple in tr_triples_updated_:
                 str_triple = [str(item) for item in triple]
                 f.write("\t".join(str_triple) + "\n")
+        with open(fully_corrupted_dataset_fp + "/gt2id.txt", "w") as f:
+            f.write(str(len(gt_triples_updated_)) + "\n")
+            for triple in gt_triples_updated_:
+                str_triple = [str(item) for item in triple]
+                f.write("\t".join(str_triple) + "\n")
     # generate dataset with X% corrupions
     partial = int(exp_config["feedback"]["corrupt_rate"] * nontede_updates.shape[0])
     nontede_updates_partial = nontede_updates[:partial,:]
@@ -167,8 +216,16 @@ if __name__ == "__main__":
     # then add corrupted triples
     new_triples = np.unique(nontede_updates_partial[:,3:], axis=0)
     tr_triples_updated_ = np.append(tr_triples_updated, new_triples, axis=0)
-    # output the fully corrupted dataset
+    # first delete sampled triples
+    mask = np.zeros(shape=(gt_triples.shape[0]), dtype=bool)
+    for update in nontede_updates_partial:
+        mask = mask | np.equal(gt_triples, update[0:3]).all(1)
+    gt_triples_updated = np.delete(gt_triples, mask, axis=0)
+    # then add corrupted triples
+    gt_triples_updated_ = np.append(gt_triples_updated, new_triples, axis=0)
+    # output the partially corrupted dataset
     tr_triples_updated_[:, [1, 2]] = tr_triples_updated_[:, [2, 1]]
+    gt_triples_updated_[:, [1, 2]] = gt_triples_updated_[:, [2, 1]]
     partial_str = str(int(exp_config["feedback"]["corrupt_rate"] * 100))
     partially_corrupted_dataset_fp = original_dataset_fp + "_CORR_" + partial_str
     if not os.path.exists(partially_corrupted_dataset_fp):
@@ -180,5 +237,10 @@ if __name__ == "__main__":
         with open(partially_corrupted_dataset_fp + "/0_train2id.txt", "w") as f:
             f.write(str(len(tr_triples_updated_)) + "\n")
             for triple in tr_triples_updated_:
+                str_triple = [str(item) for item in triple]
+                f.write("\t".join(str_triple) + "\n")
+        with open(fully_corrupted_dataset_fp + "/gt2id.txt", "w") as f:
+            f.write(str(len(gt_triples_updated_)) + "\n")
+            for triple in gt_triples_updated_:
                 str_triple = [str(item) for item in triple]
                 f.write("\t".join(str_triple) + "\n")
