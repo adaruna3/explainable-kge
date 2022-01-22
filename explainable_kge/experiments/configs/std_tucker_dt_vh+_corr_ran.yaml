@@ -79,4 +79,4 @@ plotting:
   num_examples: 15
 feedback:
   noise_reduction_rate: 1.0
-  correction_rate: 0.75
+  correction_rate: 1.0

@@ -78,4 +78,5 @@ plotting:
   mode: "amt"
   num_examples: 15
 feedback:
-  corrupt_rate: 0.55
+  noise_reduction_rate: 1.0
+  correction_rate: 1.0
