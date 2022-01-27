@@ -1306,6 +1306,7 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
                                                                          model, device)
         fr_id, bk_id = order_possible_paths(args, gnd_paths_fr_scores, gnd_paths_bk_scores)
         pair_idx = -1
+        gnd_path_found = False
         # attempts to form all complete grounded explanation paths in order of likelihood
         while pair_idx < len(fr_id)-1:
             pair_idx += 1
@@ -1323,6 +1324,11 @@ def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, p
                     else:
                         gnd_path_bk = gnd_paths_bk[bk_id[pair_idx]]
                     gnd_paths.append(gnd_path_fr + connection + gnd_path_bk)
+                    if args["explain"]["explanations"] != "all":
+                        gnd_path_found = True
+                        break
+                if gnd_path_found:
+                    break
     # stores the grounded explanation for debug
     explanation_df = pd.DataFrame(columns=["explanation","head","tail","y_logit","y_hat"])
     explanation_df = explanation_df.append({"head": head, "tail": tail, "y_logit": pred, "y_hat": label}, ignore_index=True)

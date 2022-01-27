@@ -28,6 +28,7 @@ from matplotlib.colors import to_rgba
 
 # for terminal logging
 from explainable_kge.logger.terminal_utils import logout, load_config
+from explainable_kge.models import model_utils
 
 
 import pdb
@@ -815,13 +816,10 @@ def global_plot(args):
 
 
 class TurkerResult:
-    def __init__(self, amt_json):
-        self.user_id = amt_json["turkId"]
+    def __init__(self, amt_json, amt_id):
+        self.user_id = amt_id
         self.prac_data = amt_json["examples"]
         self.gold_data = amt_json["test"][-1:]
-        # DEBUG
-        self.gold_data[0].append(0)
-        # DEBUG
         self.test_id = int(amt_json["testId"])
         self.test_data = amt_json["test"][:-1]
         self.survey_data = amt_json["questionnaireData"]
@@ -830,13 +828,16 @@ class TurkerResult:
         self.test_score = 0.0
 
     def eval_practice(self, answers):
-        self.prac_score = eval_questions(answers, self.prac_data)
+        self.prac_score = eval_questions_v1(answers, self.prac_data)
 
-    def eval_test(self, answers):
-        self.test_score = eval_questions(answers, self.test_data)
+    def eval_test_v1(self, answers):
+        self.test_score = eval_questions_v1(answers, self.test_data)
+
+    def eval_test_v2(self, answers):
+        self.test_score = eval_questions_v2(answers, self.test_data)
 
     def eval_gold(self, answers):
-        self.gold_score = eval_questions(answers, self.gold_data)
+        self.gold_score = eval_questions_v1(answers, self.gold_data)
 
 
 class AmtTest:
@@ -879,7 +880,7 @@ class AmtTest:
                     self.qas[i][j][answer+1] += 1
 
 
-def eval_questions(answers, data):
+def eval_questions_v1(answers, data):
     assert len(answers) == len(data)
     num_q = 0
     correct = 0
@@ -892,6 +893,22 @@ def eval_questions(answers, data):
         if (np.all(np.asarray(answers[i])==-1) and data[i][-1]) or (np.any(np.asarray(answers[i])!=-1) and not data[i][-1]):
             correct += 1
         num_q += len(data[i])
+    return float(correct) / float(num_q)
+
+
+def eval_questions_v2(answers, data):
+    assert len(answers) == len(data)
+    num_q = 0
+    correct = 0
+    for i in range(len(answers)): # i loops on examples
+        try:
+            assert len(answers[i])+1 == len(data[i])
+        except:
+            pdb.set_trace()
+        for j in range(len(answers[i])): # j loop on example parts
+            if data[i][j] in answers[i][j]:
+                correct += 1
+            num_q += 1
     return float(correct) / float(num_q)
 
 
@@ -918,7 +935,7 @@ def plot_answer_tally(amt_tally):
     return figs
 
 
-def get_majority_score(args, tally, prac_json, test_json):
+def get_majority_score(args, tally, prac_json, test_json, gt, e2i, r2i, toggle):
     m_answers = []
     for i, q in enumerate(tally[-1].qas):
         m_answer = []
@@ -929,7 +946,7 @@ def get_majority_score(args, tally, prac_json, test_json):
                 m_answer.append(np.argmax(q_part)-1)
         m_answers.append(m_answer)
     prac_answers = [[part["correct_id"] for part in question['parts']] for question in prac_json]
-    prac_score = eval_questions(prac_answers, m_answers)
+    prac_score = eval_questions_v1(prac_answers, m_answers)
 
     m_answers = []
     tally_keys = sorted(list(tally.keys()))
@@ -944,12 +961,16 @@ def get_majority_score(args, tally, prac_json, test_json):
                     m_answer.append(np.argmax(q_part)-1)
             m_answers.append(m_answer)
     stop = int(args["plotting"]["num_examples"]) * (max(tally_keys)+1)
-    test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[:stop]]
-    test_score = eval_questions(test_answers, m_answers)
+    if toggle:
+        test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[:stop]]
+        test_score = eval_questions_v1(test_answers, m_answers)
+    else:
+        test_answers = load_test_answers(gt, e2i, r2i, test_json[:stop])
+        test_score = eval_questions_v2(test_answers, m_answers)
     return prac_score, test_score
 
 
-def get_best_turker_score(args, tally, amt_data, test_json):
+def get_best_turker_score(args, tally, amt_data, test_json, gt, e2i, r2i, toggle):
     best_prac_score = max([amt_result.prac_score for amt_result in amt_data])
 
     b_answers = []
@@ -958,13 +979,17 @@ def get_best_turker_score(args, tally, amt_data, test_json):
     for test_id in tally_keys:
         test_turker_ids = tally[test_id].turker_ids
         test_turkers = [amt_result for amt_result in amt_data if amt_result.user_id in test_turker_ids]
-        assert len(test_turkers) == 3
+        #assert len(test_turkers) == 3
         test_turker_practice_scores = [test_turker.prac_score for test_turker in test_turkers]
         best_turker = test_turkers[np.argmax(test_turker_practice_scores)]
         b_answers += best_turker.test_data
     stop = int(args["plotting"]["num_examples"]) * (max(tally_keys)+1)
-    test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[:stop]]
-    best_test_score = eval_questions(test_answers, b_answers)
+    if toggle:
+        test_answers = [[part["correct_id"] for part in question['parts']] for question in test_json[:stop]]
+        best_test_score = eval_questions_v1(test_answers, b_answers)
+    else:
+        test_answers = load_test_answers(gt, e2i, r2i, test_json[:stop])
+        best_test_score = eval_questions_v2(test_answers, b_answers)
     return best_prac_score, best_test_score
 
 
@@ -990,7 +1015,149 @@ def plot_exit_survey(amt_data):
     return figs
 
 
-def amt_plot(args):
+def load_dataset(args):
+    ds = model_utils.load_dataset(args)
+    ds.load_bernouli_sampling_stats()
+    if args["model"]["name"] == "tucker":
+        ds.reload_er_vocab()
+    ds.load_current_ents_rels()
+    ds.load_current_ents_rels()
+    ds.model_name = None  # makes __getitem__ only retrieve triples instead of triple pairs
+    return ds
+
+
+def load_gt_triples(args):
+    dirty_ds_name = copy(args["dataset"]["name"])
+    clean_ds_name = dirty_ds_name.split("_")[0] + "_CLEAN_" + dirty_ds_name.split("_")[-1]
+    clean_train_args = copy(args)
+    clean_train_args["dataset"]["name"] = clean_ds_name
+    clean_train_args["dataset"]["set_name"] = "0_train2id"
+    clean_train_args["continual"]["session"] = 0
+    clean_tr_dataset = load_dataset(clean_train_args)
+    clean_gt_triples = clean_tr_dataset.load_triples(["0_gt2id.txt"])
+    return np.asarray(clean_gt_triples), clean_tr_dataset.e2i, clean_tr_dataset.r2i
+
+
+def in_filter_triples(triples, filter_triples):
+    filtered_triples = []
+    for triple in triples:
+        if any(np.equal(triple, filter_triples).all(1)):
+            filtered_triples.append(triple.tolist())
+    return np.asarray(filtered_triples)
+
+
+def load_test_answers(gt, e2i, r2i, json_file):
+    answers = []
+    for example in json_file:
+        ex_answers = []
+        for part in example['parts']:
+            part_answer = []
+            # checks if default (-1) correct
+            split_fact = part["fact"].split(",")
+            r = split_fact[1]
+            if r[0] == "_":
+                h = split_fact[-1]
+                t = split_fact[0]
+            else:
+                h = split_fact[0]
+                t = split_fact[-1]
+            hi = e2i[h]
+            ri = r2i[r.replace("_","")]
+            ti = e2i[t]
+            if in_filter_triples(np.asarray([[hi,ri,ti]]),gt).shape[0]:
+                part_answer.append(-1)
+            # checks if any corrections correct
+            for i, triple_str in enumerate(part["correction_triples"]):
+                split_fact = triple_str.split(",")
+                r = split_fact[1]
+                if r[0] == "_":
+                    h = split_fact[-1]
+                    t = split_fact[0]
+                else:
+                    h = split_fact[0]
+                    t = split_fact[-1]
+                hi = e2i[h]
+                ri = r2i[r.replace("_","")]
+                ti = e2i[t]
+                if in_filter_triples(np.asarray([[hi,ri,ti]]),gt).shape[0]:
+                    part_answer.append(i)
+            if not len(part_answer):
+                part_answer.append(3)
+            ex_answers.append(part_answer)
+        answers.append(ex_answers)
+    return answers
+
+
+def amt_plot_v1(args):
+    fp = os.path.join("explainable_kge/logger/logs", args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(args["logging"]["log_num"]))
+    results_fp = os.path.join(os.path.abspath(fp), "results")
+    locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+    # load the testing json
+    json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str + "_clean_filtered"
+    json_fp = os.path.join(results_fp, json_name + '.json')
+    with open(json_fp, "r") as f:
+        test_json = json.load(f)
+    # load the practice json
+    json_name = "examples"
+    json_fp = os.path.join(results_fp, json_name + '.json')
+    with open(json_fp, "r") as f:
+        prac_json = json.load(f)
+    prac_answers = [[part["correct_id"] for part in question['parts']] for question in prac_json]
+    gold_answers = [[part["correct_id"] for part in question['parts']] for question in prac_json[1:2]]
+    # load the gt triples
+    gt_triples, gt_e2i, gt_r2i = load_gt_triples(args)
+    # load the amt results, tally answers, and score each turker individually
+    amt_data = []
+    amt_tally = {}
+    amt_folder = "amt_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
+    amt_fp = os.path.join(results_fp, amt_folder)
+    amt_results_fps = [os.path.join(amt_fp, file) for file in os.listdir(amt_fp) if file.endswith(".json")]
+    for i, amt_results_fp in enumerate(amt_results_fps):
+        with open(amt_results_fp, "r") as f:
+            turker_data = TurkerResult(json.load(f), amt_results_fp)
+        turker_data.eval_practice(prac_answers)
+        if -1 in amt_tally:
+            amt_tally[-1].add_turker(turker_data.user_id, turker_data.prac_data)
+        else:
+            amt_tally[-1] = AmtTest(-1, prac_json)
+            amt_tally[-1].add_turker(turker_data.user_id, turker_data.prac_data)
+        turker_data.eval_gold(gold_answers)
+        start = turker_data.test_id * int(args["plotting"]["num_examples"])
+        stop = start + int(args["plotting"]["num_examples"])
+        test_answers = load_test_answers(gt_triples, gt_e2i, gt_r2i, test_json[start:stop])
+        turker_data.eval_test_v2(test_answers)
+        if turker_data.test_id in amt_tally:
+            amt_tally[turker_data.test_id].add_turker(turker_data.user_id, turker_data.test_data)
+        else:
+            amt_tally[turker_data.test_id] = AmtTest(turker_data.test_id, test_json[start:stop])
+            amt_tally[turker_data.test_id].add_turker(turker_data.user_id, turker_data.test_data)
+        amt_data.append(turker_data)
+    # make answer tally figures for practice and test
+    figs = plot_answer_tally(amt_tally)
+    # make individual, average, and majority vote performance figures
+    correct_acc = []
+    turker_ids = []
+    for amt_result in amt_data:
+        correct_acc.append([amt_result.prac_score, amt_result.test_score])
+        turker_ids.append(amt_result.user_id)
+    correct_acc = np.asarray(correct_acc)
+    correct_acc = np.append(correct_acc, [[np.mean(correct_acc[:,0]), np.mean(correct_acc[:,1])]], axis=0)
+    correct_acc = np.append(correct_acc, [[np.std(correct_acc[:,0]), np.std(correct_acc[:,1])]], axis=0)
+    m_prac, m_test = get_majority_score(args, amt_tally, prac_json, test_json, gt_triples, gt_e2i, gt_r2i, 0)
+    correct_acc = np.append(correct_acc, [[m_prac, m_test]], axis=0)
+    b_prac, b_test = get_best_turker_score(args, amt_tally, amt_data, test_json, gt_triples, gt_e2i, gt_r2i, 0)
+    correct_acc = np.append(correct_acc, [[b_prac, b_test]], axis=0)
+    fig = plot_table(stats=np.asarray(correct_acc),
+                     row_labels=turker_ids + ["Mean", "STD", "Majority Vote", "Best Practice"],
+                     col_labels=["Practice", "Test"],
+                     figure_size=(5,6))
+    figs.append(fig)
+    # make survey histogram figure
+    figs += plot_exit_survey(amt_data)
+    return figs
+
+
+def amt_plot_v0(args):
     fp = os.path.join("explainable_kge/logger/logs", args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(args["logging"]["log_num"]))
     results_fp = os.path.join(os.path.abspath(fp), "results")
     locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
@@ -1060,7 +1227,7 @@ if __name__ == "__main__":
     plt.rcParams.update({'font.weight': 'bold'})
     figs = []
     if exp_config["plotting"]["mode"] == "amt":
-        figs += amt_plot(exp_config)
+        figs += amt_plot_v1(exp_config)
         main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
         figs_fp = os.path.join(main_fp, "results", "amt_{}.pdf".format(exp_config["explain"]["xmodel"]))
     else:

@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 import tqdm
 import json
+import random
 import shutil
 
 import __main__  # used to get the original execute module
@@ -78,6 +79,84 @@ def extract_triples(triples, valid_triples):
     return masked_triples
 
 
+def get_updates(ex_json, e2i, r2i):
+    ex_adds = []
+    ex_removes = []
+    t2e = {}
+    for i, example in enumerate(ex_json):
+        if example["y_bb"] != example["y_xm"] or (example["y_bb"] == example["y_xm"] and not example["y_xm"]):
+            continue
+        for part in example["parts"]:
+            split_fact = part["fact"].split(",")
+            r = split_fact[1]
+            if r[0] == "_":
+                h = split_fact[-1]
+                t = split_fact[0]
+            else:
+                h = split_fact[0]
+                t = split_fact[-1]
+            hi = e2i[h]
+            ri = r2i[r.replace("_","")]
+            ti = e2i[t]
+            ex_removes.append([hi,ri,ti])
+            if (hi,ri,ti) in t2e:
+                t2e[(hi,ri,ti)].append(i)
+            else:
+                t2e[(hi,ri,ti)] = [i]
+            for triple_str in part["correction_triples"]:
+                split_fact = triple_str.split(",")
+                r = split_fact[1]
+                if r[0] == "_":
+                    h = split_fact[-1]
+                    t = split_fact[0]
+                else:
+                    h = split_fact[0]
+                    t = split_fact[-1]
+                ex_adds.append([e2i[h],r2i[r.replace("_","")],e2i[t]])
+                if (e2i[h],r2i[r.replace("_","")],e2i[t]) in t2e:
+                    t2e[(e2i[h],r2i[r.replace("_","")],e2i[t])].append(i)
+                else:
+                    t2e[(e2i[h],r2i[r.replace("_","")],e2i[t])] = [i]
+    return np.asarray(ex_adds), np.asarray(ex_removes), t2e
+
+
+def filter_removes(ex_removes, main_fp, tr_d, de_d, clean_tr_d):
+    # include removes done by classification
+    ghat_fp = os.path.join(main_fp, "ghat.tsv")
+    g_hat = pd.read_csv(ghat_fp, sep="\t", header=None).to_numpy(dtype=str)
+    g_hat = np.asarray([[tr_d.e2i[triple[0]],tr_d.r2i[triple[1]],tr_d.e2i[triple[-1]]] for triple in g_hat])
+    trde = np.unique(np.append(tr_d.triples, de_d.triples, axis=0), axis=0)
+    ghat_removes = not_in_filter_triples(trde, g_hat)
+    ex_removes = np.append(ex_removes, ghat_removes, axis=0)
+    print("Number of total removes: " + str(ex_removes.shape[0]))
+    ex_removes = np.unique(ex_removes, axis=0)
+    print("Number of unique removes: " + str(ex_removes.shape[0]))
+    # filter out clean gt set removes
+    clean_gt = clean_tr_d.load_triples(["0_gt2id.txt"])
+    ex_removes = not_in_filter_triples(ex_removes, clean_gt)
+    print("Number of removes after removing gt pos set: " + str(ex_removes.shape[0]))
+    # report removes in explanations
+    report_counts(ex_removes, tr_d.r2i, "removes per relation type in explanations")
+    return ex_removes, ghat_removes
+
+
+def filter_adds(ex_adds, ex_removes, clean_tr_d, clean_te_d):
+    # include clean gt set removes to adds
+    clean_gt = clean_tr_d.load_triples(["0_gt2id.txt"])
+    ex_adds = np.append(ex_adds, in_filter_triples(ex_removes, clean_gt), axis=0)
+    print("Number of total adds: " + str(ex_adds.shape[0]))
+    ex_adds = np.unique(ex_adds, axis=0)
+    print("Number of unique adds: " + str(ex_adds.shape[0]))
+    # filter out gt test triples (FP in test)
+    ex_adds = not_in_filter_triples(ex_adds, clean_te_d.triples)
+    print("Number of adds after removing gt pos test set: " + str(ex_adds.shape[0]))
+    # filter out non gt clean train/valid (other FP)
+    ex_adds = in_filter_triples(ex_adds, clean_gt)
+    print("Number of adds after removing non gt clean train/valid set: " + str(ex_adds.shape[0]))
+    report_counts(ex_adds, tr_d.r2i, "adds per relation type in explanations")
+    return ex_adds
+
+
 def setup_experiment(args):
     # loads current (corrutped) train, valid, test sets
     train_args = copy(args)
@@ -134,6 +213,16 @@ def load_corrupt_json(args, main_fp):
     return corrupt_json
 
 
+def store_corrupt_json(args, main_fp, exp_json, num):
+    sfe_fp = os.path.join(main_fp, "results")
+    locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+    json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str + "_clean_filtered"
+    json_fp = os.path.join(sfe_fp, json_name + '.json')
+    with open(json_fp, "w") as f:
+        random.shuffle(exp_json)
+        json.dump(exp_json[:num], f)
+
+
 if __name__ == "__main__":
     # parse arguments
     exp_config = load_config("Standard setting experiment")
@@ -152,34 +241,7 @@ if __name__ == "__main__":
     corr_json = load_corrupt_json(exp_config, exp_fp)
 
     # GET REMOVES AND ADDS in explanations
-    removes = []
-    adds = []
-    for example in corr_json:
-        if example["y_bb"] != example["y_xm"] or (example["y_bb"] == example["y_xm"] and not example["y_xm"]):
-            continue
-        for part in example["parts"]:
-            split_fact = part["fact"].split(",")
-            r = split_fact[1]
-            if r[0] == "_":
-                h = split_fact[-1]
-                t = split_fact[0]
-            else:
-                h = split_fact[0]
-                t = split_fact[-1]
-            hi = tr_d.e2i[h]
-            ri = tr_d.r2i[r.replace("_","")]
-            ti = tr_d.e2i[t]
-            removes.append([hi,ri,ti])
-            for triple_str in part["correction_triples"]:
-                split_fact = triple_str.split(",")
-                r = split_fact[1]
-                if r[0] == "_":
-                    h = split_fact[-1]
-                    t = split_fact[0]
-                else:
-                    h = split_fact[0]
-                    t = split_fact[-1]
-                adds.append([tr_d.e2i[h],tr_d.r2i[r.replace("_","")],tr_d.e2i[t]])
+    adds, removes, triple2example = get_updates(corr_json, tr_d.e2i, tr_d.r2i)
     # DEBUG: SANITY CHECK
     # clean_gt_triples = clean_tr_d.load_triples(["0_gt2id.txt"])
     # trde_triples = np.unique(np.append(tr_d.triples, de_d.triples, axis=0), axis=0)
@@ -188,41 +250,33 @@ if __name__ == "__main__":
     # DEBUG: SANITY CHECK
 
     # FILTER REMOVES
-    removes = np.asarray(removes)
-    # include removes done by classification
-    ghat_fp = os.path.join(exp_fp, "ghat.tsv")
-    g_hat = pd.read_csv(ghat_fp, sep="\t", header=None).to_numpy(dtype=str)
-    g_hat = np.asarray([[tr_d.e2i[triple[0]],tr_d.r2i[triple[1]],tr_d.e2i[triple[-1]]] for triple in g_hat])
+    all_removes, classify_removes = filter_removes(removes, exp_fp, tr_d, de_d, clean_tr_d)
+    # report corruptions in dataset as check
     trde_triples = np.unique(np.append(tr_d.triples, de_d.triples, axis=0), axis=0)
-    removes = np.append(removes, not_in_filter_triples(trde_triples, g_hat), axis=0)
-    print("Number of total removes: " + str(removes.shape[0]))
-    removes = np.unique(removes, axis=0)
-    print("Number of unique removes: " + str(removes.shape[0]))
-    # filter out clean gt set removes
     clean_gt_triples = clean_tr_d.load_triples(["0_gt2id.txt"])
-    non_clean_triples = not_in_filter_triples(removes, clean_gt_triples)
-    print("Number of removes after removing gt pos set: " + str(non_clean_triples.shape[0]))
-    # report removes in explanations
-    report_counts(non_clean_triples, tr_d.r2i, "removes per relation type in explanations")
-    # report corruptions in dataset
-    trde_triples = np.unique(np.append(tr_d.triples, de_d.triples, axis=0), axis=0)
     nongt_triples = not_in_filter_triples(trde_triples, clean_gt_triples)
     report_counts(nongt_triples, tr_d.r2i, "removes per relation type in train/valid triple set")
 
     # FILTER ADDS
-    # include clean gt set removes to adds
-    adds = np.asarray(adds)
-    adds = np.append(adds, in_filter_triples(removes, clean_gt_triples), axis=0)
-    print("Number of total adds: " + str(adds.shape[0]))
-    adds = np.unique(adds, axis=0)
-    print("Number of unique adds: " + str(adds.shape[0]))
-    # filter out gt test triples (FP in test)
-    nontegt_adds = not_in_filter_triples(adds, clean_te_d.triples)
-    print("Number of adds after removing gt pos test set: " + str(nontegt_adds.shape[0]))
-    # filter out non gt clean train/valid (other FP)
-    gttrde_only_adds = in_filter_triples(nontegt_adds, clean_gt_triples)
-    print("Number of adds after removing non gt clean train/valid set: " + str(gttrde_only_adds.shape[0]))
-    report_counts(gttrde_only_adds, tr_d.r2i, "adds per relation type in explanations")
+    all_adds = filter_adds(adds, np.unique(removes,axis=0), clean_tr_d, clean_te_d)
+    
+    # select explanations for AMT
+    add_examples = []
+    for add in all_adds:
+        add_examples.append(triple2example[tuple(add)][0])
+    remove_examples = []
+    for remove in all_removes:
+        try:
+            remove_examples.append(triple2example[tuple(remove)][0])
+        except:
+            if in_filter_triples([remove],classify_removes).shape[0]:
+                continue
+            else:
+                pdb.set_trace()
+    amt_ex_ids = list(set(add_examples).union(set(remove_examples)))
+    amt_exs = [corr_json[amt_ex_id] for amt_ex_id in amt_ex_ids]
+    store_corrupt_json(exp_config, exp_fp, amt_exs, 330)
+    exit()
 
     # generate dataset with X% corrupions
     tr_triples = tr_d.triples
@@ -230,12 +284,12 @@ if __name__ == "__main__":
     gt_triples = tr_d.load_triples(["0_gt2id.txt"])
 
     # set X% for removes and adds
-    partial = int(exp_config["feedback"]["noise_reduction_rate"] * non_clean_triples.shape[0])
-    partial_idxs = np.random.choice(np.arange(non_clean_triples.shape[0]), partial, False)
-    non_clean_cleanteneg_triples_partial = non_clean_triples[partial_idxs,:]
-    partial = int(exp_config["feedback"]["correction_rate"] * gttrde_only_adds.shape[0])
-    partial_idxs = np.random.choice(np.arange(gttrde_only_adds.shape[0]), partial, False)
-    gttrde_only_adds_partial = gttrde_only_adds[partial_idxs,:]
+    partial = int(exp_config["feedback"]["noise_reduction_rate"] * all_removes.shape[0])
+    partial_idxs = np.random.choice(np.arange(all_removes.shape[0]), partial, False)
+    non_clean_cleanteneg_triples_partial = all_removes[partial_idxs,:]
+    partial = int(exp_config["feedback"]["correction_rate"] * all_adds.shape[0])
+    partial_idxs = np.random.choice(np.arange(all_adds.shape[0]), partial, False)
+    gttrde_only_adds_partial = all_adds[partial_idxs,:]
 
     # generate tr & de dataset with X% corrupions
     # first delete X% corrupt triples
