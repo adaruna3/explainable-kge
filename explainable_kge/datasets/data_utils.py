@@ -17,13 +17,13 @@ swap_ents("0_test.txt","0_test2.txt")
 swap_ents("0_valid.txt","0_valid2.txt")
 swap_ents2("0_entity2id.txt","0_entity2id2.txt")
 
-mv 0_train.txt 0_train.bkp
+mv 0_train.txt 0_train_og.txt
 mv 0_train2.txt 0_train.txt
-mv 0_valid.txt 0_valid.bkp
+mv 0_valid.txt 0_valid_og.txt
 mv 0_valid2.txt 0_valid.txt
-mv 0_test.txt 0_test.bkp
+mv 0_test.txt 0_test_og.txt
 mv 0_test2.txt 0_test.txt
-mv 0_entity2id.txt 0_entity2id.bkp
+mv 0_entity2id.txt 0_entity2id_og.txt
 mv 0_entity2id2.txt 0_entity2id.txt
 """
 

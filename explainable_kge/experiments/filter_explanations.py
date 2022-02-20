@@ -260,23 +260,25 @@ if __name__ == "__main__":
     # FILTER ADDS
     all_adds = filter_adds(adds, np.unique(removes,axis=0), clean_tr_d, clean_te_d)
     
+    # FILTER EXPLANATIONS EXAMPLES TO EXPORT
     # select explanations for AMT
-    add_examples = []
-    for add in all_adds:
-        add_examples.append(triple2example[tuple(add)][0])
-    remove_examples = []
-    for remove in all_removes:
-        try:
-            remove_examples.append(triple2example[tuple(remove)][0])
-        except:
-            if in_filter_triples([remove],classify_removes).shape[0]:
-                continue
-            else:
-                pdb.set_trace()
-    amt_ex_ids = list(set(add_examples).union(set(remove_examples)))
-    amt_exs = [corr_json[amt_ex_id] for amt_ex_id in amt_ex_ids]
-    store_corrupt_json(exp_config, exp_fp, amt_exs, 330)
-    exit()
+    # add_examples = []
+    # for add in all_adds:
+    #     add_examples.append(triple2example[tuple(add)][0])
+    # remove_examples = []
+    # for remove in all_removes:
+    #     try:
+    #         remove_examples.append(triple2example[tuple(remove)][0])
+    #     except:
+    #         if in_filter_triples([remove],classify_removes).shape[0]:
+    #             continue
+    #         else:
+    #             pdb.set_trace()
+    # amt_ex_ids = list(set(add_examples).union(set(remove_examples)))
+    # amt_exs = [corr_json[amt_ex_id] for amt_ex_id in amt_ex_ids]
+    # store_corrupt_json(exp_config, exp_fp, amt_exs, 330)
+    # exit()
+    # FILTER EXPLANATIONS EXAMPLES TO EXPORT
 
     # generate dataset with X% corrupions
     tr_triples = tr_d.triples
@@ -315,6 +317,9 @@ if __name__ == "__main__":
     tr_triples_updated[:, [1, 2]] = tr_triples_updated[:, [2, 1]]
     de_triples_updated[:, [1, 2]] = de_triples_updated[:, [2, 1]]
     gt_triples_updated[:, [1, 2]] = gt_triples_updated[:, [2, 1]]
+    np.random.shuffle(tr_triples_updated)
+    np.random.shuffle(de_triples_updated)
+    np.random.shuffle(gt_triples_updated)
     partial_str1 = str(int(exp_config["feedback"]["noise_reduction_rate"] * 100))
     partial_str2 = str(int(exp_config["feedback"]["correction_rate"] * 100))
     original_dataset_fp = tr_d.fp[:-1]

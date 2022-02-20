@@ -14,12 +14,12 @@ import pdb
 def setup_experiment(args):
     # init batch processors for training and validation
     train_args = copy(args)
-    train_args["dataset"]["set_name"] = "0_train2id"
-    train_args["continual"]["session"] = 0
+    train_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_train2id"
+    train_args["continual"]["session"] = str(args["logging"]["log_num"])
     tr_bp = model_utils.TrainBatchProcessor(train_args)
     dev_args = copy(args)
-    dev_args["dataset"]["set_name"] = "0_valid2id"
-    dev_args["continual"]["session"] = 0
+    dev_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_valid2id"
+    dev_args["continual"]["session"] = str(args["logging"]["log_num"])
     dev_args["dataset"]["neg_ratio"] = 0
     dev_args["dataset"]["dataset_fps"] = None
     de_bp = model_utils.DevBatchProcessor(dev_args)
@@ -47,7 +47,7 @@ def setup_experiment(args):
 
     tracker_args = copy(args)
     tracker_args["tag"] = os.path.basename(__main__.__file__).split(".")[0]
-    tracker_args["sess"] = str(0)
+    tracker_args["sess"] = str(args["logging"]["log_num"])
     tracker = model_utils.EarlyStopTracker(tracker_args)
 
     return tr_bp, de_bp, viz, model, optimizer, tracker
