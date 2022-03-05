@@ -286,10 +286,10 @@ if __name__ == "__main__":
     gt_triples = tr_d.load_triples(["0_gt2id.txt"])
 
     # set X% for removes and adds
-    partial = int(exp_config["feedback"]["noise_reduction_rate"] * all_removes.shape[0])
+    partial = round(exp_config["feedback"]["noise_reduction_rate"] * all_removes.shape[0])
     partial_idxs = np.random.choice(np.arange(all_removes.shape[0]), partial, False)
     non_clean_cleanteneg_triples_partial = all_removes[partial_idxs,:]
-    partial = int(exp_config["feedback"]["correction_rate"] * all_adds.shape[0])
+    partial = round(exp_config["feedback"]["correction_rate"] * all_adds.shape[0])
     partial_idxs = np.random.choice(np.arange(all_adds.shape[0]), partial, False)
     gttrde_only_adds_partial = all_adds[partial_idxs,:]
 
@@ -320,8 +320,8 @@ if __name__ == "__main__":
     np.random.shuffle(tr_triples_updated)
     np.random.shuffle(de_triples_updated)
     np.random.shuffle(gt_triples_updated)
-    partial_str1 = str(int(exp_config["feedback"]["noise_reduction_rate"] * 100))
-    partial_str2 = str(int(exp_config["feedback"]["correction_rate"] * 100))
+    partial_str1 = str(round(exp_config["feedback"]["noise_reduction_rate"] * 100))
+    partial_str2 = str(round(exp_config["feedback"]["correction_rate"] * 100))
     original_dataset_fp = tr_d.fp[:-1]
     # partially_corrupted_dataset_fp = original_dataset_fp + "_GT_DENOISED_" + partial_str1 + "_CORRECTED_" + partial_str2
     partially_corrupted_dataset_fp = original_dataset_fp + "_DENOISED_" + partial_str1 + "_CORRECTED_" + partial_str2

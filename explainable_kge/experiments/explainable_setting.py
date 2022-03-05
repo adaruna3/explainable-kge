@@ -20,11 +20,11 @@ def setup_experiment(args):
     # loads the training and valid dataset
     train_args = copy(args)
     train_args["dataset"]["set_name"] = "0_train2id"
-    train_args["continual"]["session"] = 0
+    train_args["continual"]["session"] = str(args["logging"]["log_num"])
     tr_dataset = model_utils.load_dataset(train_args)
     dev_args = copy(args)
     dev_args["dataset"]["set_name"] = "0_valid2id"
-    dev_args["continual"]["session"] = 0
+    dev_args["continual"]["session"] = str(args["logging"]["log_num"])
     de_dataset = model_utils.load_dataset(dev_args)
     # combines datasets
     tr_de_dataset = deepcopy(tr_dataset)
@@ -43,7 +43,7 @@ def setup_experiment(args):
     clean_args = copy(args)
     clean_args["dataset"]["name"] = clean_ds_name
     clean_args["dataset"]["set_name"] = "0_train2id"
-    clean_args["continual"]["session"] = 0
+    clean_args["continual"]["session"] = str(args["logging"]["log_num"])
     clean_dataset = model_utils.load_dataset(clean_args)
     clean_triples = clean_dataset.load_triples(["0_gt2id.txt"], num_skip=0)
 
@@ -57,7 +57,7 @@ def setup_experiment(args):
     else:
         model.to(torch.device("cpu"), non_blocking=True)
     model_optim_args["tag"] = "standard_setting"
-    model_optim_args["sess"] = str(0)
+    model_optim_args["sess"] = str(args["logging"]["log_num"])
     model = model_utils.load_model(model_optim_args, model)
 
     # makes experiment path

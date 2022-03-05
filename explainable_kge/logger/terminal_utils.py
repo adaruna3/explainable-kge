@@ -98,7 +98,7 @@ def load_config(description):
 def confirm_args():
     """ captures input from user for 10 s, if no input provided returns """
     logout('Continue training? (Y/n) waiting 10s ...',"i")
-    i, o, e = select([stdin], [], [], 10.0)
+    i, o, e = select([stdin], [], [], 1.0)
     if i:  # read input
         cont = stdin.readline().strip()
         if cont == 'Y' or cont == 'y' or cont == '':

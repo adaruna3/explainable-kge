@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# add ignores about generated model checkpoints, datasets, and result logs
+explainable_kge/logger/logs/
+explainable_kge/models/checkpoints/

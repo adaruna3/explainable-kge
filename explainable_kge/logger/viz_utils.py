@@ -6,7 +6,7 @@ from copy import copy
 from matplotlib import colors
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-from math import log, sqrt
+from math import acosh, log, sqrt
 import pickle
 
 # for stats tests
@@ -17,7 +17,6 @@ from sklearn.metrics import f1_score, accuracy_score, cohen_kappa_score
 from scipy import stats
 import probscale
 import seaborn
-import pingouin as ping
 
 # for plotting
 import matplotlib.pyplot as plt
@@ -216,7 +215,8 @@ def plot_mbar_stacked(values1, values2, names, colors, hatches, ylabel=None, tit
 
 
 def plot_line(xvalues, yvalues, names, colors, linestyles,
-              ylabel=None, ylim=None, yerr=None, xlim=None,
+              ylabel=None, ylim=None, yerr=None, xlim=None, xlabel=None,
+              markers=None, marker_style=None, marker_colors=None,
               xticks=None, top_title=None, legend_loc="best", anchor=(0,0)):
 
     num_lines = yvalues.shape[0]
@@ -231,6 +231,10 @@ def plot_line(xvalues, yvalues, names, colors, linestyles,
             ax.fill_between(xvalues, yvalues[j] - yerr[j], yvalues[j] + yerr[j],
                             color=colors[j], alpha=0.2)
         lines.append(line)
+    if marker_style is not None:
+        for j in range(len(markers)):
+            line, = ax.plot(markers[j][0], markers[j][1], marker=marker_style[j], mfc=marker_colors[j], mec=marker_colors[j])
+            lines.append(line)
 
     ax.legend(lines, names, bbox_to_anchor=anchor,
               loc=legend_loc,
@@ -249,6 +253,9 @@ def plot_line(xvalues, yvalues, names, colors, linestyles,
 
     if ylabel is not None:
         ax.set_ylabel(ylabel)
+
+    if xlabel is not None:
+        ax.set_xlabel(xlabel)
 
     if top_title is not None:
         fig.suptitle(top_title, x=0.5, y=0.99)
@@ -672,14 +679,14 @@ def plot_params(results):
     return [l1_fig, alpha_fig, losses_fig]
 
 
-def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000]): #,1500,2000,2500]):
+def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500]):
     root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
     # load all the data
     summarys = pd.DataFrame(columns=["log_num","k","Relation","Coverage","Fidelity","F1-Fidelity", "Weight"])
     for log_num in range(1,6):
         folder_path = root_fp + "_" + str(log_num)
         for k in locality:
-            result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_local3_" + str(k))
+            result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(k))
             results_fp = os.path.join(folder_path, "results", result_name)
             result = load_data(results_fp)
             summary = get_summary(result)
@@ -742,14 +749,14 @@ def locality_plot(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,
         plots.append(lp)
     return plots
 
-def best_locality(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500,1000]):#,1500,2000,2500]):
+def best_locality(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,30,40,50,100,150,200,250,300,400,500]):
     root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
     # load all the data
     summarys = pd.DataFrame(columns=["log_num","k","Relation","Coverage","Fidelity","F1-Fidelity", "Weight"])
     for log_num in range(1,6):
         folder_path = root_fp + "_" + str(log_num)
         for k in locality:
-            result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_local3_" + str(k))
+            result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + str(k))
             results_fp = os.path.join(folder_path, "results", result_name)
             result = load_data(results_fp)
             summary = get_summary(result)
@@ -783,13 +790,14 @@ def best_locality(args, locality=[2,3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,26,28,
                      title=title_str)
     return [fig]
 
-def global_plot(args):
+def cross_val_plot(args):
     # load the data
     root_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"])
     summarys = pd.DataFrame(columns=["log_num","Relation","Coverage","Fidelity","F1-Fidelity","Weight"])
-    for log_num in range(1,6):
+    for log_num in range(0,5):
         folder_path = root_fp + "_" + str(log_num)
-        result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_global_" + str(exp_config["explain"]["locality_k"]))
+        locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+        result_name = "{}.pkl".format(args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str)
         results_fp = os.path.join(folder_path, "results", result_name)
         if not os.path.exists(results_fp):
             logout("Experiment results pickle does not exist: " + str(results_fp), "f")
@@ -811,7 +819,7 @@ def global_plot(args):
     wstd, _ = weighted_avg_and_std(rel_summary["Std F1-Fidelity"].values, rel_summary["Weight"].values)
     rel_summary = rel_summary.append({"Relation":"Overall","Avg F1-Fidelity":wavg,"Std F1-Fidelity":wstd}, ignore_index=True)
     # plot table
-    title_str = "Student: " + exp_config["explain"]["xmodel"] + ", Locality: Global"
+    title_str = "Student: " + exp_config["explain"]["xmodel"] + ", Locality: " + args["explain"]["locality"]
     fig = plot_table(stats=rel_summary[rel_summary.columns[1:]].to_numpy(dtype=float),
                      row_labels=rel_summary["Relation"].to_numpy(str),
                      col_labels=rel_summary.columns[1:].to_numpy(str),
@@ -1350,7 +1358,11 @@ def test_normality(data):
     # ax = fig.add_subplot(111)
     # stats.probplot(data, plot=ax)
     # ax.set_title("Probplot for Turker feedback accuracy")
-    return normal, fig
+    if len(data) > 8:
+        return p1, p2, normal, fig
+    else:
+        return p2, normal, fig
+    
 
 
 def correlation_ratio(categories, measurements):
@@ -1384,16 +1396,33 @@ def check_variances(amt_tests):
         scores_ordered.append(scores[i])
     scores_ordered = tuple(scores_ordered)
     fval, pval = stats.f_oneway(*scores_ordered)
-    scores_ordered = []
-    labels_ordered = []
-    for i in range(len(scores)):
-        scores_ordered.append(scores[i])
-        labels_ordered.append([i,i,i])
-    scores_ordered = np.asarray(scores_ordered)
-    labels_ordered = np.asarray(labels_ordered)
-    eta_squared = correlation_ratio(labels_ordered.flatten(), scores_ordered.flatten())
-    num_samples = ping.power_anova(eta_squared, 5, None, 0.8, 0.05)
-    pdb.set_trace()
+    return pval
+
+
+def get_acc_vs_mrr_plot(args, start, final):
+    # start_acc, start_mrr = start
+    # final_acc, final_mrr = final
+    test_accs = [0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100]
+    test_mrrs = []
+    fp_root = "explainable_kge/logger/logs/standard_setting__" + args["dataset"]["name"] + "_"
+    for acc in test_accs:
+        fp_end = "DENOISED_" + str(acc) + "_CORRECTED_" + str(acc) + "_clmoffline_ln0/test_0.csv"
+        with open(fp_root + fp_end, "r") as f:
+            for line in f:
+                test_mrrs.append(float(line.split(",")[6]))
+                break
+    # test_accs.insert(0, start_acc)
+    # test_mrrs.insert(0, start_mrr)
+    # for i, acc in enumerate(test_accs):
+    #     if final_acc < acc:
+    #         test_accs.insert(i, final_acc)
+    #         test_mrrs.insert(i, final_mrr)
+    #         break
+    test_mrrs = np.expand_dims(np.asarray(test_mrrs),0) * 100.0
+    fig = plot_line(np.asarray(test_accs), test_mrrs, ["Interpolated"], ["tab:gray"], ["--"],
+                    markers=[start,final], marker_style=["o","o"], marker_colors=["r","g"],
+                    ylabel="MRR", xlabel="Non-expert Correction Accuracy", top_title="User ACC % vs MRR", anchor=(1.0,0.15))
+    return [fig]
 
 
 def amt_plot_rq2(args):
@@ -1448,17 +1477,25 @@ def amt_plot_rq2(args):
     for amt_result in amt_data:
         correct_acc.append([amt_result.prac_score, amt_result.test_score])
         turker_ids.append(amt_result.user_id)
-    figs += check_variances(amt_data)
+    anova_p_val = check_variances(amt_data)
+    if anova_p_val > 0.05:
+        logout("No statistically significant differences in means, one-way ANOVA passed","s")
+        logout("P-value:" + str(anova_p_val),"i")
+    else:
+        logout("Statistically significant differences in means, one-way ANVOA failed","e")
+        logout("P-value:" + str(anova_p_val),"i")
     correct_acc = np.asarray(correct_acc)
     correct_acc = np.append(correct_acc, [[np.mean(correct_acc[:,0]), np.mean(correct_acc[:,1])]], axis=0)
     correct_acc = np.append(correct_acc, [[np.std(correct_acc[:,0]), np.std(correct_acc[:,1])]], axis=0)
     m_prac, m_test_scores = get_majority_score(args, amt_tally, prac_json, test_json, gt_triples, gt_e2i, gt_r2i, 0)
-    check, fig = test_normality(m_test_scores)
+    shapiro_p_value, check, fig = test_normality(m_test_scores)
     figs.append(fig)
     if check:
         logout("Majority-vote turker feedback accuracy samples passed normality tests","s")
+        logout("P-value:" + str(shapiro_p_value),"i")
     else:
         logout("Majority-vote turker feedback accuracy samples did not normality tests","e")
+        logout("P-value:" + str(shapiro_p_value),"i")
     correct_acc = np.append(correct_acc, [[m_prac, np.mean(m_test_scores)]], axis=0)
     correct_acc = np.append(correct_acc, [[0.0, np.std(m_test_scores)]], axis=0)
     b_prac, b_test = get_best_turker_score(args, amt_tally, amt_data, test_json, gt_triples, gt_e2i, gt_r2i, 0)
@@ -1476,6 +1513,7 @@ def amt_plot_rq2(args):
                      figure_size=(5,6))
     figs.append(fig)
     us, totals, accs = get_chance_stats(args, amt_tally, test_json, gt_triples, gt_e2i, gt_r2i, 0)
+    figs += get_acc_vs_mrr_plot(args, (0.0,32.1), (100*np.mean(m_test_scores),69.9))
     chance_stats = []
     chance_prob = 0.0
     actul_acc = 0.0
@@ -1556,10 +1594,15 @@ if __name__ == "__main__":
         figs += amt_plot_rq2(exp_config)
         main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
         figs_fp = os.path.join(main_fp, "results", "amt_{}.pdf".format(exp_config["explain"]["xmodel"]))
-    else:
+    elif exp_config["plotting"]["mode"] == "cross_val_plot":
+        figs += cross_val_plot(exp_config)
+        main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
+        figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["plotting"]["output_pdf"]))
+    elif exp_config["plotting"]["mode"] == "opt_locality_plot":
         figs += locality_plot(exp_config)
-        figs += global_plot(exp_config)
         figs += best_locality(exp_config)
         main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
-        figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["explain"]["xmodel"]))
+        figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["plotting"]["output_pdf"]))
+    else:
+        logout("Plot type not recognized.","f")        
     figs2pdf(figs, figs_fp)

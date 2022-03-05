@@ -14,7 +14,7 @@ from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import vstack
 from sklearn.linear_model import SGDClassifier
 from sklearn.tree import DecisionTreeClassifier, plot_tree
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, PredefinedSplit
 from sklearn.feature_extraction import DictVectorizer
 import tqdm
 
@@ -1453,7 +1453,7 @@ def add_ed(word):
     elif word in ["sweep"]:
         return word[:-2] + "pt"
     elif word in ["break"]:
-        return "broke"
+        return "broken"
     elif word in ["throw"]:
         return "thrown"
     else:
@@ -1788,8 +1788,9 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                     continue
     #     c. Train explainable model using scikit-learn
             if fit_model:
+                n_jobs = multiprocessing.cpu_count()
+                num_folds = min(5, min(counts))
                 if args["explain"]["xmodel"] == "logit":
-                    n_jobs = multiprocessing.cpu_count()
                     param_grid_logit = [{
                         'l1_ratio': [.1, .5, .7, .9, .95, .99, 1],
                         'alpha': [0.01, 0.001, 0.0001],
@@ -1799,17 +1800,46 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                         'tol': [1e-3],
                         'class_weight': ["balanced"],
                         'n_jobs': [n_jobs],
-                        'random_state': [1],
+                        'random_state': [2],
                     }]
-                    num_folds = min(5, min(counts))
                     gs = GridSearchCV(SGDClassifier(), param_grid_logit, n_jobs=n_jobs, refit=True, cv=num_folds)
                     gs.fit(train_x_local, train_y_local)
                     xmodel = gs.best_estimator_
                     best_params = str(gs.best_params_)
+                    #print("Best train score for " + rel + ": " + str(gs.best_score_))
                 elif args["explain"]["xmodel"] == "decision_tree":
-                    xmodel = DecisionTreeClassifier(random_state=1)
-                    xmodel.fit(train_x_local, train_y_local)
-                    best_params = str(xmodel.get_params())
+                    param_grid_dt = [{
+                        'criterion': ["gini","entropy"],
+                        'splitter': ["best","random"],
+                        'max_depth': [None,1,2,3,4,5,6,7],
+                        'max_features': [None,'sqrt','log2',int(train_x_local.shape[1]/2)],
+                        'random_state': [2]
+                    }]
+                    if args["explain"]["locality"] == "global": # optimize for all examples
+                        num_train = train_x_local.shape[0]
+                        num_test = test_x.shape[0]
+                        train_x_local = vstack((train_x_local, test_x))
+                        train_y_local = np.concatenate((train_y_local, te_y))
+                        ps = PredefinedSplit(np.concatenate((-np.ones(shape=(num_train,),dtype=int),np.zeros(shape=(num_test,),dtype=int)),axis=0))
+                    elif args["explain"]["locality"] == "local3": # optimize for current test example
+                        num_train = train_x_local.shape[0]
+                        num_test = 1
+                        train_x_local = vstack((train_x_local, test_x[test_idx]))
+                        train_y_local = np.concatenate((train_y_local, [te_y[test_idx]]))
+                        ps = PredefinedSplit(np.concatenate((-np.ones(shape=(num_train,),dtype=int),np.zeros(shape=(num_test,),dtype=int)),axis=0))
+                    gs = GridSearchCV(DecisionTreeClassifier(), param_grid_dt, n_jobs=n_jobs, refit=True, cv=ps)
+                    gs.fit(train_x_local, train_y_local)
+                    xmodel = gs.best_estimator_
+                    best_params = str(gs.best_params_)
+                    #print("Best train score for " + rel + ": " + str(gs.best_score_))
+                    # xmodel = DecisionTreeClassifier(random_state=2)
+                    # xmodel.fit(train_x_local, train_y_local)
+                    # best_params = str(xmodel.get_params())
+                if args["explain"]["locality"] == "global":
+                    fit_model = False
+                elif args["explain"]["locality"] == "local3":
+                    if locality_k > min_examples:
+                        fit_model = False
             prediction = xmodel.predict(test_x[test_idx]).item()
             if args["explain"]["xmodel"] == "logit":
                 paths = get_logit_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx], feature_names, xmodel.coef_, te_head, te_tail, prediction, te_y[test_idx])
@@ -1825,8 +1855,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                                       "predict": prediction,
                                       "train_size": train_x_local.shape,
                                       "params": best_params}, ignore_index=True)
-            if args["explain"]["locality"] == "global":
-                fit_model = False
+            
     if args["explain"]["ground_explanations"]:
         facts = []
         for example in exp_json:
