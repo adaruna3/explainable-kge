@@ -1,3 +1,6 @@
 [submodule "pra"]
 	path = pra
 	url = git@github.com:adaruna3/pra.git
+[submodule "xkge_amt"]
+	path = xkge_amt
+	url = git@github.com:adaruna3/xkge_amt.git

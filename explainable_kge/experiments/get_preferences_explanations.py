@@ -281,7 +281,7 @@ def setup_experiment(args):
 
 
 def store_json(args, exp_json):
-    log_folder = args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(0)
+    log_folder = args["dataset"]["name"] + "_" + args["model"]["name"] + "_0"
     json_fp = os.path.join("explainable_kge/logger/logs", log_folder, "results", "user_preferences_amt_explanations.json")
     with open(json_fp, "w") as f:
         random.shuffle(exp_json)
@@ -345,7 +345,7 @@ if __name__ == "__main__":
         rq1_exs.append(rq1_ex)
     # store the json
     print(len(rq1_exs))
-    store_json(exp_fp, rq1_exs)
+    store_json(exp_config, rq1_exs)
     
     
     
