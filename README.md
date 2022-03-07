@@ -28,7 +28,7 @@ Next, for GPU usage check if `torch.cuda.is_available()` is `True`.
 * Knowledge Graph Embedding models: [TuckER](https://arxiv.org/pdf/1901.09590.pdf) implemented [here](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/models/standard_models.py)
 * Interpretable Graph Feature models: [XKE](https://github.com/arthurcgusmao/XKE) implemented [here](https://github.com/adaruna3/explainable-kge/blob/74e2f968dff7c17a230ad6f75bdbcdbdab938b4a/explainable_kge/models/explain_utils.py#L1791), and our approach [XKGE](https://github.com/adaruna3/explainable-kge/blob/74e2f968dff7c17a230ad6f75bdbcdbdab938b4a/explainable_kge/models/explain_utils.py#L1809)
 * Sub-graph Feature Extraction (SFE): [SFE](https://aclanthology.org/D15-1173.pdf) implemented [here](https://github.com/adaruna3/pra/tree/786f93213b054b1c3ba33a82283b4ccaca5f34b7)
-* Datasets: [VH+_CLEAN_RAN](https://github.com/adaruna3/explainable-kge/tree/dev/explainable_kge/datasets/VH+_CLEAN_RAN/), which is <img src="https://render.githubusercontent.com/render/math?math=D}"> in the paper, and [VH+_CORR_RAN](https://github.com/adaruna3/explainable-kge/tree/dev/explainable_kge/datasets/VH+_CORR_RAN/), which is <img src="https://render.githubusercontent.com/render/math?math=\hat{D}}"> in the paper.
+* Datasets: [VH+_CLEAN_RAN](https://github.com/adaruna3/explainable-kge/tree/dev/explainable_kge/datasets/VH+_CLEAN_RAN/), which is <img src="https://render.githubusercontent.com/render/math?math=D"> in the paper, and [VH+_CORR_RAN](https://github.com/adaruna3/explainable-kge/tree/dev/explainable_kge/datasets/VH+_CORR_RAN/), which is <img src="https://render.githubusercontent.com/render/math?math=\hat{D}"> in the paper.
 
     
 ## Run the Paper Experiments
