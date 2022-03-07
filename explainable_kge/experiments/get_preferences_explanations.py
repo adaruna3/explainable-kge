@@ -280,8 +280,9 @@ def setup_experiment(args):
     return xkge_json, tr_datasets, causal_ex, plans, fp
 
 
-def store_json(main_fp, exp_json):
-    json_fp = os.path.join(main_fp, "rq1_amt_data.json")
+def store_json(args, exp_json):
+    log_folder = args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(0)
+    json_fp = os.path.join("explainable_kge/logger/logs", log_folder, "results", "user_preferences_amt_explanations.json")
     with open(json_fp, "w") as f:
         random.shuffle(exp_json)
         json.dump(exp_json, f)
