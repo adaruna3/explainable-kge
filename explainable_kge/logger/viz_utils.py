@@ -1534,16 +1534,15 @@ def amt_plot_rq2(args):
 
 def amt_plot_rq1(args):
     # loads the test json
-    results_fp = "explainable_kge/logger/logs"
-    amt_folder = "rq1_amt_data"
-    json_fp = os.path.join(results_fp, amt_folder, "rq1_amt_data.json")
+    log_folder = args["dataset"]["name"] + "_" + args["model"]["name"] + "_0"
+    json_fp = os.path.join("explainable_kge/logger/logs", log_folder, "results", "user_preferences_amt_explanations.json")
     with open(json_fp, "r") as f:
         test_json = json.load(f)
     # load the amt results, tally answers, and score each turker individually
+    amt_folder = "./explainable_kge/amt_data/user_pref_study"
     amt_data = []
     amt_tally = {}
-    amt_fp = os.path.join(results_fp, amt_folder)
-    amt_results_fps = [os.path.join(amt_fp, file) for file in os.listdir(amt_fp) if file.endswith(".json")]
+    amt_results_fps = [os.path.join(amt_folder, file) for file in os.listdir(amt_folder) if file.endswith(".json")]
     for i, amt_results_fp in enumerate(amt_results_fps):
         if 'rq1_amt_data.json' in amt_results_fp: continue
         with open(amt_results_fp, "r") as f:
@@ -1589,7 +1588,8 @@ if __name__ == "__main__":
     figs = []
     if exp_config["plotting"]["mode"] == "amt1":
         figs += amt_plot_rq1(exp_config)
-        figs_fp = os.path.join("explainable_kge/logger/logs", "rq1_amt_data", "amt_{}.pdf".format(exp_config["explain"]["xmodel"]))
+        main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
+        figs_fp = os.path.join(main_fp, "results", "{}.pdf".format(exp_config["plotting"]["output_pdf"]))
     elif exp_config["plotting"]["mode"] == "amt2":
         figs += amt_plot_rq2(exp_config)
         main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
