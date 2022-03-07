@@ -75,6 +75,7 @@ explain:
   ground_explanations: False
   corrupt_json: False
   explanations: "best"
+  experiment: "alg"
 plotting:
   mode: "amt1"
   num_examples: 15

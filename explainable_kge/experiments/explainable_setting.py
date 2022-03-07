@@ -19,11 +19,11 @@ import pdb
 def setup_experiment(args):
     # loads the training and valid dataset
     train_args = copy(args)
-    train_args["dataset"]["set_name"] = "0_train2id"
+    train_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_train2id"
     train_args["continual"]["session"] = str(args["logging"]["log_num"])
     tr_dataset = model_utils.load_dataset(train_args)
     dev_args = copy(args)
-    dev_args["dataset"]["set_name"] = "0_valid2id"
+    dev_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_valid2id"
     dev_args["continual"]["session"] = str(args["logging"]["log_num"])
     de_dataset = model_utils.load_dataset(dev_args)
     # combines datasets
@@ -42,10 +42,10 @@ def setup_experiment(args):
     clean_ds_name = dirty_ds_name.split("_")[0] + "_CLEAN_" + dirty_ds_name.split("_")[-1]
     clean_args = copy(args)
     clean_args["dataset"]["name"] = clean_ds_name
-    clean_args["dataset"]["set_name"] = "0_train2id"
+    clean_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_train2id"
     clean_args["continual"]["session"] = str(args["logging"]["log_num"])
     clean_dataset = model_utils.load_dataset(clean_args)
-    clean_triples = clean_dataset.load_triples(["0_gt2id.txt"], num_skip=0)
+    clean_triples = clean_dataset.load_triples([str(args["logging"]["log_num"]) + "_gt2id.txt"], num_skip=0)
 
     # loads trained embedding model
     model_optim_args = copy(args)
@@ -67,7 +67,6 @@ def setup_experiment(args):
     fp = os.path.abspath(fp)
 
     return model, tr_de_dataset, clean_triples, fp
-    # return model, tr_de_dataset, fp
 
 
 if __name__ == "__main__":
@@ -83,7 +82,6 @@ if __name__ == "__main__":
         logout("Running with CPU, experiments will be slow", "w")
     # prepare experiment objects
     exp_model, tr_de_d, clean_gt_triples, exp_fp = setup_experiment(exp_config)
-    # exp_model, tr_de_d, exp_fp = setup_experiment(exp_config)
     # 1. Generate G^
     #     a. For each training triple, perturb with NN to be all possible triples in G^
     ent_embeddings = exp_model.E.weight.cpu().detach().numpy()
@@ -109,13 +107,28 @@ if __name__ == "__main__":
                         split_fp, split_name, ghat_fp, exp_fp)
     # 3. Train explainable model to predict each test triple
     locality_str = str(exp_config["explain"]["locality_k"]) if type(exp_config["explain"]["locality_k"]) == int else "best"
-    results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str))
+    corrupt_str = "corrupted" if exp_config["explain"]["corrupt_json"] else "clean"
+    if exp_config["explain"]["experiment"] == "alg":
+        results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str))
+    elif exp_config["explain"]["experiment"] == "preferences":
+        results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str + "_preferences"))
+    else:
+        logout("Experiment setting not recognized" + str(exp_config["explain"]["experiment"]), "f")
     if not os.path.exists(results_fp):
-        results = x_utils.get_explainable_results(exp_config, knn, exp_config["explain"]["locality_k"],
-                                                  tr_de_d.r2i, tr_de_d.e2i, tr_de_d.i2e,
-                                                  sfe_fp, results_fp, ent_embeddings,
-                                                  exp_model, g_hat_dicts, device)
+        if exp_config["explain"]["experiment"] == "alg":
+            results = x_utils.get_explainable_results(exp_config, knn, exp_config["explain"]["locality_k"],
+                                                    tr_de_d.r2i, tr_de_d.e2i, tr_de_d.i2e,
+                                                    sfe_fp, results_fp, ent_embeddings,
+                                                    exp_model, g_hat_dicts, device)
+        elif exp_config["explain"]["experiment"] == "preferences":
+            results = x_utils.get_explainable_results_rq1(exp_config, knn, exp_config["explain"]["locality_k"],
+                                                        tr_de_d.r2i, tr_de_d.e2i, tr_de_d.i2e,
+                                                        sfe_fp, results_fp, ent_embeddings,
+                                                        exp_model, g_hat_dicts, device)
+        else:
+            logout("Experiment setting not recognized" + str(exp_config["explain"]["experiment"]), "f")
     else:
         with open(results_fp, "rb") as f:
             results = pickle.load(f)
-    viz_utils.get_summary(results)
+    if exp_config["explain"]["experiment"] == "alg":
+        viz_utils.get_summary(results)

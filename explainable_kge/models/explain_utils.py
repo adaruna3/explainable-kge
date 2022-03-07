@@ -221,32 +221,32 @@ def load_datasets_to_dataframes(args):
     """
     # dev set
     dev_args = copy(args)
-    dev_args["continual"]["session"] = 0
-    dev_args["dataset"]["set_name"] = "0_valid2id"
+    dev_args["continual"]["session"] = int(args["logging"]["log_num"])
+    dev_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_valid2id"
     de_p_d = model_utils.load_dataset(dev_args)
     p_triples = copy(de_p_d.triples)
     p_triples = np.append(p_triples, np.ones(shape=(p_triples.shape[0],1), dtype=np.int), axis=1)
-    dev_args["dataset"]["set_name"] = "0_valid2id_neg"
+    dev_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_valid2id_neg"
     de_n_d = model_utils.load_dataset(dev_args)
     n_triples = copy(de_n_d.triples)
     n_triples = np.append(n_triples, -np.ones(shape=(n_triples.shape[0],1), dtype=np.int), axis=1)
     de_df = pd.DataFrame(np.concatenate((p_triples, n_triples), axis=0))
     # test set
     test_args = copy(args)
-    test_args["continual"]["session"] = 0
-    test_args["dataset"]["set_name"] = "0_test2id"
+    test_args["continual"]["session"] = int(args["logging"]["log_num"])
+    test_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_test2id"
     te_p_d = model_utils.load_dataset(test_args)
     p_triples = copy(te_p_d.triples)
     p_triples = np.append(p_triples, np.ones(shape=(p_triples.shape[0],1), dtype=np.int), axis=1)
-    test_args["dataset"]["set_name"] = "0_test2id_neg"
+    test_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_test2id_neg"
     te_n_d = model_utils.load_dataset(test_args)
     n_triples = copy(te_n_d.triples)
     n_triples = np.append(n_triples, -np.ones(shape=(n_triples.shape[0],1), dtype=np.int), axis=1)
     te_df = pd.DataFrame(np.concatenate((p_triples, n_triples), axis=0))
     # train set
     train_args = copy(args)
-    train_args["dataset"]["set_name"] = "0_train2id"
-    train_args["continual"]["session"] = 0
+    train_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_train2id"
+    train_args["continual"]["session"] = int(args["logging"]["log_num"])
     train_args["dataset"]["neg_ratio"] = 1
     tr_dataset = model_utils.load_dataset(train_args)
     tr_dataset.load_bernouli_sampling_stats()
@@ -445,11 +445,11 @@ def get_logit_explain_paths(ex_fp, rel, example_num, feats, feat_names, coeff, h
     return paths
 
 
-def get_dt_explain_paths(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label, plot_tree):
+def get_dt_explain_paths(ex_fp, rel, example_num, example, model, feat_names, head, tail, pred, label, plot_dt):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail)
-    if plot_tree:
+    if plot_dt:
         # save whole tree
         plt.axis("tight")
         plot_tree(model, class_names=["False", "True"], feature_names=feat_names, node_ids=True, filled=True)
@@ -1274,7 +1274,7 @@ def fmt_corrupt_part(args, head, rel, tail, correct_path, corrupt_ids, ghat, e2i
     return corrupt_path
 
 
-def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, true_label, model, ghat, e2i, i2e, r2i, device):
+def get_grounded_explanation(ex_fp, args, paths, example_num, rel, head, tail, pred, label, model, ghat, e2i, i2e, r2i, device):
     if not os.path.exists(ex_fp):
         os.makedirs(ex_fp)
     file_name = rel + "_ex" + str(example_num) + "_" + str(head) + '_' + str(tail) + "_gnd"
@@ -1705,13 +1705,203 @@ def get_local_data3(head, tail, tr_heads, tr_tails, embeddings, e2i, locality, m
     return masked_example_idxs[:locality]-1
 
 
+def get_explainable_results_rq1(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent_embeddings, kg_embedding, ghat, device):
+    locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+    exp_name = "explanations" + "_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
+    results = pd.DataFrame(columns=["rel", "sample", "label", "predict", "train_size", "params"])
+    if args["explain"]["ground_explanations"]:
+        exp_json = []
+    # DEBUG
+    exp_triples = [
+        ["scrub.a","clean.s","HasEffect"], # 2 test, done
+        ["disinfect.a","clean.s","HasEffect"], # 4 valid, done
+        ["sponge.a","clean.s","HasEffect"], # 0 test, done
+        ["wipe.a","clean.s","HasEffect"],# 2 valid, done
+        ["dust.a","clean.s","HasEffect"],# 0 valid, done
+        ["scrubber.o","scrub.a","ObjUsedTo"], # 0 valid, done
+        ["disinfectant_wipe.o","disinfect.a","ObjUsedTo"],# 2 valid, done
+        ["washing_sponge.o","sponge.a","ObjUsedTo"], # 3 test, done
+        ["cleaning_rag.o","wipe.a","ObjUsedTo"], #  2 valid, done
+        ["feather_duster.o","dust.a","ObjUsedTo"],# 1 valid, done
+        ["scrubber.o","sink.l","ObjOnLoc"], # 2 test, done
+        ["disinfectant_wipe.o","kitchen_table.l","ObjOnLoc"], # 4 valid
+        ["washing_sponge.o","sink.l","ObjInLoc"],# 2 valid, done
+        ["cleaning_rag.o","kitchen_counter.l","ObjOnLoc"],# 2 test, done
+        ["feather_duster.o","cabinet.l","ObjInLoc"] # 3 valid, done
+    ]
+    exp_triples = np.asarray(exp_triples)
+    exp_triples[:, [1, 2]] = exp_triples[:, [2, 1]]
+    for rel, rel_id in r2i.items():
+    #     a. Load the extracted SFE features/labels
+        print("Working on " + str(rel))
+        train_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "train.tsv")
+        valid_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "valid.tsv")
+        test_fp = os.path.join(sfe_fp, args["model"]["name"], rel, "test.tsv")
+        tr_heads, tr_tails, tr_y, tr_feat_dicts = parse_feature_matrix(train_fp)
+        v = DictVectorizer(sparse=True)
+        v.fit(tr_feat_dicts)
+        train_x = v.transform(tr_feat_dicts)
+        feature_names = v.get_feature_names()
+
+        te_heads, te_tails, te_y, te_feat_dicts = parse_feature_matrix(test_fp)
+        de_heads, de_tails, de_y, de_feat_dicts = parse_feature_matrix(valid_fp)
+        valid_x = v.transform(de_feat_dicts)
+        test_x = v.transform(te_feat_dicts)
+        te_heads = np.concatenate((de_heads, te_heads))
+        te_tails = np.concatenate((de_tails, te_tails))
+        te_y = np.concatenate((de_y, te_y))
+        test_x = vstack((valid_x, test_x))
+        fit_model = True
+        rel_exp_triples = exp_triples[exp_triples[:,1]==rel]
+    #     b. Sample local training set for each test triple
+        for test_idx, test_pair in tqdm.tqdm(enumerate(zip(rel_exp_triples[:,0], rel_exp_triples[:,-1]))):
+            te_head, te_tail = test_pair
+            # prepares xmodel train data
+            if args["explain"]["locality"] == "global":
+                train_x_local = train_x
+                train_y_local = tr_y
+            else:
+                # various methods for selecting subgraph g to sample
+                locality_k = k if type(k) == int else list(k)[rel_id]
+                if args["explain"]["locality"] == "local1":
+                    examples_indices = get_local_data1(te_head, te_tail, tr_heads, tr_tails)
+                elif args["explain"]["locality"] == "local2":
+                    examples_indices = get_local_data2(knn, locality_k, te_head, te_tail, tr_heads, tr_tails, e2i, i2e)
+                elif args["explain"]["locality"] == "local3":
+                    pos_mask = tr_y == 1
+                    neg_mask = tr_y == -1
+                    min_examples = min(np.count_nonzero(pos_mask), np.count_nonzero(neg_mask))
+                    locality = min(locality_k, min_examples)
+                    pos = get_local_data3(te_head, te_tail, tr_heads, tr_tails, ent_embeddings, 
+                                          e2i, locality, pos_mask)
+                    neg = get_local_data3(te_head, te_tail, tr_heads, tr_tails, ent_embeddings, 
+                                          e2i, locality, neg_mask)
+                    examples_indices = np.append(pos, neg)
+                examples_indices = np.unique(examples_indices)
+                # get features and labels
+                try:
+                    train_x_local = train_x[examples_indices, :]
+                    train_y_local = tr_y[examples_indices]
+                except IndexError:
+                    results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
+                                              "predict": 0, "train_size": None, "params": None}, ignore_index=True)
+                    continue
+            # checks if training feasible
+            classes, counts = np.unique(train_y_local, return_counts=True)
+            if len(classes) <= 1:
+                logout("Cannot train for `{}` because singular class.".format(str(test_pair)), "w")
+                results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
+                                         "predict": 0, "train_size": None, "params": None}, ignore_index=True)
+                continue
+            else:
+                if min(counts) < 2:
+                    logout("Cannot train for `{}` because less then 3 examples in a class.".format(str(test_pair)), "w")
+                    results = results.append({"rel": rel, "sample": test_pair, "label": te_y[test_idx], 
+                                             "predict": 0, "train_size": None, "params": None}, ignore_index=True)
+                    continue
+    #     c. Train explainable model using scikit-learn
+            if fit_model:
+                n_jobs = multiprocessing.cpu_count()
+                num_folds = min(5, min(counts))
+                if args["explain"]["xmodel"] == "logit":
+                    param_grid_logit = [{
+                        'l1_ratio': [.1, .5, .7, .9, .95, .99, 1],
+                        'alpha': [0.01, 0.001, 0.0001],
+                        'loss': ["log"],
+                        'penalty': ["elasticnet"],
+                        'max_iter': [100000],
+                        'tol': [1e-3],
+                        'class_weight': ["balanced"],
+                        'n_jobs': [n_jobs],
+                        'random_state': [1],
+                    }]
+                    gs = GridSearchCV(SGDClassifier(), param_grid_logit, n_jobs=n_jobs, refit=True, cv=num_folds)
+                    gs.fit(train_x_local, train_y_local)
+                    xmodel = gs.best_estimator_
+                    best_params = str(gs.best_params_)
+                elif args["explain"]["xmodel"] == "decision_tree":
+                    param_grid_dt = [{
+                        'criterion': ["gini","entropy"],
+                        'splitter': ["best","random"],
+                        'max_depth': [None,1,2,3,4,5,6,7],
+                        'max_features': [None,'sqrt','log2',int(train_x_local.shape[1]/2)],
+                        'random_state': [2]
+                    }]
+                    if args["explain"]["locality"] == "global": # optimize for all examples
+                        num_train = train_x_local.shape[0]
+                        num_test = test_x.shape[0]
+                        train_x_local = vstack((train_x_local, test_x))
+                        train_y_local = np.concatenate((train_y_local, te_y))
+                        ps = PredefinedSplit(np.concatenate((-np.ones(shape=(num_train,),dtype=int),np.zeros(shape=(num_test,),dtype=int)),axis=0))
+                    elif args["explain"]["locality"] == "local3": # optimize for current test example
+                        num_train = train_x_local.shape[0]
+                        num_test = 1
+                        train_x_local = vstack((train_x_local, test_x[test_idx]))
+                        train_y_local = np.concatenate((train_y_local, [te_y[test_idx]]))
+                        ps = PredefinedSplit(np.concatenate((-np.ones(shape=(num_train,),dtype=int),np.zeros(shape=(num_test,),dtype=int)),axis=0))
+                    gs = GridSearchCV(DecisionTreeClassifier(), param_grid_dt, n_jobs=n_jobs, refit=True, cv=ps)
+                    gs.fit(train_x_local, train_y_local)
+                    xmodel = gs.best_estimator_
+                    best_params = str(gs.best_params_)
+            # check which set the example is in
+            if any((np.stack([te_heads,te_tails],axis=1)==[[te_head,te_tail]]).all(1)):
+                pair_idx = (np.stack([te_heads,te_tails],axis=1)==[[te_head,te_tail]]).all(1)
+                assert np.count_nonzero(pair_idx) == 1
+                x = test_x[pair_idx]
+                y = te_y[pair_idx][0]
+            else:
+                logout("Triple not found:" + te_head + "," + rel + "," + te_head,"w")
+                continue
+            prediction = xmodel.predict(x).item()
+            if args["explain"]["xmodel"] == "logit":
+                paths = get_logit_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, x, feature_names, xmodel.coef_, te_head, te_tail, prediction, y)
+            else:
+                paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, x.toarray(), xmodel, feature_names, te_head, te_tail, prediction, y, args["explain"]["save_tree"])
+            if args["explain"]["ground_explanations"]:
+                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_head, te_tail, prediction, y, kg_embedding, ghat, e2i, i2e, r2i, device)
+                exp_json += exp
+            results = results.append({"rel": rel,
+                                      "sample": test_pair,
+                                      "label": y,
+                                      "predict": prediction,
+                                      "train_size": train_x_local.shape,
+                                      "params": best_params}, ignore_index=True)
+            if args["explain"]["locality"] == "global":
+                fit_model = False
+                
+    if args["explain"]["ground_explanations"]:
+        facts = []
+        for example in exp_json:
+            facts.append(tuple(example["fact"].split(",")))
+            for part in example["parts"]:
+                if part["correct_id"] != -1:
+                    facts.append(tuple(part["fact"].split(",")))
+        facts = np.unique(facts, axis=0)
+        rel_counts = [0 for _ in r2i.keys()]
+        for fact in facts:
+            rel_counts[r2i[fact[1].replace("_","")]] += 1
+        print("Number of corruptions per relation type:")
+        for r, r_id in r2i.items():
+            print(r + ": " + str(rel_counts[r_id]))
+        locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+        corrupt_str = "corrupted" if args["explain"]["corrupt_json"] else "clean"
+        json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str + "_preferences"
+        json_fp = os.path.join(sfe_fp, json_name + '.json')
+        with open(json_fp, "w") as f:
+            random.shuffle(exp_json)
+            json.dump(exp_json, f)
+    with open(results_fp, "wb") as f:
+        pickle.dump(results, f)
+    logout("Finished getting xmodel results", "s")
+    return results
+
+
 def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent_embeddings, kg_embedding, ghat, device):
     locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
     exp_name = "explanations" + "_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
     results = pd.DataFrame(columns=["rel", "sample", "label", "predict", "train_size", "params"])
     if args["explain"]["ground_explanations"]:
         exp_json = []
-    train_df, dev_df, test_df = load_datasets_to_dataframes(args)
     # DEBUG
     for rel, rel_id in r2i.items():
     #     a. Load the extracted SFE features/labels
@@ -1831,10 +2021,6 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
                     gs.fit(train_x_local, train_y_local)
                     xmodel = gs.best_estimator_
                     best_params = str(gs.best_params_)
-                    #print("Best train score for " + rel + ": " + str(gs.best_score_))
-                    # xmodel = DecisionTreeClassifier(random_state=2)
-                    # xmodel.fit(train_x_local, train_y_local)
-                    # best_params = str(xmodel.get_params())
                 if args["explain"]["locality"] == "global":
                     fit_model = False
                 elif args["explain"]["locality"] == "local3":
@@ -1846,8 +2032,7 @@ def get_explainable_results(args, knn, k, r2i, e2i, i2e, sfe_fp, results_fp, ent
             else:
                 paths = get_dt_explain_paths(os.path.join(sfe_fp, exp_name), rel, test_idx, test_x[test_idx].toarray(), xmodel, feature_names, te_head, te_tail, prediction, te_y[test_idx], args["explain"]["save_tree"])
             if args["explain"]["ground_explanations"]:
-                true_label = test_df.loc[(test_df[1] == rel_id) & (test_df[0] == e2i[te_head]) & (test_df[2] == e2i[te_tail])][3].values[0]
-                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_head, te_tail, prediction, te_y[test_idx], true_label, kg_embedding, ghat, e2i, i2e, r2i, device)
+                exp = get_grounded_explanation(os.path.join(sfe_fp, exp_name), args, paths, test_idx, rel, te_head, te_tail, prediction, te_y[test_idx], kg_embedding, ghat, e2i, i2e, r2i, device)
                 exp_json += exp
             results = results.append({"rel": rel,
                                       "sample": test_pair,

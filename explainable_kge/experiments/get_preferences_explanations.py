@@ -244,12 +244,15 @@ def format_plan(plan, ex_json):
 
 def setup_experiment(args):
     # load the xkge explanations
-    fp = "explainable_kge/logger/logs"
-    if not os.path.exists(fp):
-        os.makedirs(fp)
-    fp = os.path.abspath(fp)
-    with open(os.path.join(fp,"rq1_explanations.json"),"r") as f:
-        xkge_json = json.load(f)
+    locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
+    corrupt_str = "corrupted" if args["explain"]["corrupt_json"] else "clean"
+    exp_file = "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str + "_preferences")
+    xkge_json = []
+    for i in range(5):
+        log_folder = args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(i)
+        fp = os.path.join("explainable_kge/logger/logs", log_folder, "results", exp_file)
+        with open(fp,"r") as f:
+            xkge_json += json.load(f)
     # load the triple dataset for history-based explanations
     tr_datasets = []
     for i in range(5):

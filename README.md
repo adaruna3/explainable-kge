@@ -7,9 +7,10 @@ hardware CPU or Nvidia GPU (GeForce GTX 1060 6GB or better).
 2. For GPU functionality Nvidia drivers, CUDA, and cuDNN are required.
 
 ## Installation
+1. Git clone this repo using: `git clone git@github.com:adaruna3/explainable-kge.git` 
 1. To install using conda run: `conda env create -f xkge_env.yml` in the repo root and activate
 environment via `conda activate xkge_env`
-2. Create a file `vim ~/[PATH_TO_ANACONDA]/envs/xkge_env2/lib/python3.6/site-packages/xkge.pth`
+2. Create a file `vim ~/[PATH_TO_ANACONDA]/envs/xkge_env/lib/python3.6/site-packages/xkge.pth`
 containing a single line with the absolute path to this repo. This file lets conda find the 
 `explainable_kge` module when doing imports, see [here](https://stackoverflow.com/questions/37006114/anaconda-permanently-include-external-packages-like-in-pythonpath).
 3. Get submodules: `git submodule update --init`
@@ -31,11 +32,12 @@ Next, for GPU usage check if `torch.cuda.is_available()` is `True`.
 
     
 ## Run the Paper Experiments
-1. Evaluation of Interpretable Graph Feature Model
+1. Evaluation of Interpretable Graph Feature Model:
     - Run [alg_eval.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/alg_eval.sh) using: `./explainable_kge/experiments/scripts/alg_eval.sh`
     - If this script runs correctly, it will produce 5 output folders in `./explainable_kge/logger/logs`, one for each fold of cross-validation: `VH+_CLEAN_RAN_tucker_[X]` where [X] is the fold number 0 to 4. Additionally, inside `./explainable_kge/logger/logs/VH+_CLEAN_RAN_tucker_0/` there should be 3 PDF files, each containing a set of results corresponding to the last 4 rows of the table (the last row and 4th from last row are repeats since our model without locality or decision trees is XKE)
     - There is a possibility that some of the folds error out when running due to internal configuations of SFE code, resulting in missing PDF result files. This will be seen from the Python Stack Trace as one of the runs involving `explainable_setting.py` in `alg_eval.sh` failing. That can be fixed by removing the entire `VH+_CLEAN_RAN_tucker_[X]` directory and re-running the commands in `./explainable_kge/experiments/scripts/alg_eval.sh` to generate the directory followed by the corresponding plotting comamnd to generate the PDF. Please see [alg_eval.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/alg_eval.sh).
     - The locality parameter in [alg_eval.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/alg_eval.sh) for our approach was selected by checking a range of localities and plotting the performance. Those results can be generated with [locality_dr.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/locality_dr.sh) using: `./explainable_kge/experiments/scripts/locality_dr.sh`. The output PDF will again be in `./explainable_kge/logger/logs/VH+_CLEAN_RAN_tucker_0/`
-2. 
+2. Evaluation of Explanation Preferences:
+    - Run [user_pref_gen_exp.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/alg_eval.sh) using: `./explainable_kge/experiments/scripts/user_pref_gen_exp.sh`
 
 ## ToDos
