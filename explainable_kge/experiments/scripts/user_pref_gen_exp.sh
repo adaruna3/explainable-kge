@@ -16,4 +16,4 @@ python ./explainable_kge/experiments/explainable_setting.py --config_file ./expl
 # Run 4
 python ./explainable_kge/experiments/explainable_setting.py --config_file ./explainable_kge/experiments/configs/std_tucker_dt_vh+_clean_ran.yaml --options "{'logging': {'log_num':4}, 'explain': {'experiment': 'preferences', 'ground_explanations': True}}"
 # output the complete set of explanations
-python ./explainable_kge/logger/get_preferences_explanations.py --config_file ./explainable_kge/experiments/configs/std_tucker_dt_vh+_clean_ran.yaml
+python ./explainable_kge/experiments/get_preferences_explanations.py --config_file ./explainable_kge/experiments/configs/std_tucker_dt_vh+_clean_ran.yaml
