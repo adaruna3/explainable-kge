@@ -40,7 +40,9 @@ Next, for GPU usage check if `torch.cuda.is_available()` is `True`.
     - The locality parameter in [alg_eval.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/alg_eval.sh) for our approach was selected by checking a range of localities and plotting the performance. Those results can be generated with [locality_dr.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/locality_dr.sh) using: `./explainable_kge/experiments/scripts/locality_dr.sh`. The output PDF will again be in `./explainable_kge/logger/logs/VH+_CLEAN_RAN_tucker_0/`
 2. Evaluation of Explanation Preferences:
     - Remove logs in `./explainable_kge/logger/logs` and model checkpoints in `./explainable_kge/models/checkpoints` from any previously run experiments
-    - Run [user_pref_gen_exp.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/alg_eval.sh) using: `./explainable_kge/experiments/scripts/user_pref_gen_exp.sh`
-    - If this script runs correctly, it will pr
+    - Run [user_pref_gen_exp.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/user_pref_gen_exp.sh) using: `./explainable_kge/experiments/scripts/user_pref_gen_exp.sh`
+    - If this script runs correctly, it will produce 5 output folders in `./explainable_kge/logger/logs`, one for each fold of cross-validation: `VH+_CLEAN_RAN_tucker_[X]` where [X] is the fold number 0 to 4. Additionally, inside `./explainable_kge/logger/logs/VH+_CLEAN_RAN_tucker_0/` there will be a file used for the AMT user study containing all robot interaction scenarios and explanations, `user_preferences_amt_explanations.json`. We selected 15 unique instances from this file so that each instance provides an explanation about a unique triple (there are multiple grounded explanations repeated for a triple in `user_preferences_amt_explanations.json`, so we randomly selected the 15 unique instaces).
+    - After editing `user_preferences_amt_explanations.json` to get only 15 interactions, copy the file and post to AMT using the `xkge_amt` submodule. See the README in `xkge_amt`.
+    
 
 ## ToDos
