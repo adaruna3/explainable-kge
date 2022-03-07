@@ -246,7 +246,7 @@ def setup_experiment(args):
     # load the xkge explanations
     locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
     corrupt_str = "corrupted" if args["explain"]["corrupt_json"] else "clean"
-    exp_file = "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str + "_preferences")
+    exp_file = "{}.json".format("explanations_" + exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str + "_preferences")
     xkge_json = []
     for i in range(5):
         log_folder = args["dataset"]["name"] + "_" + args["model"]["name"] + "_" + str(i)
