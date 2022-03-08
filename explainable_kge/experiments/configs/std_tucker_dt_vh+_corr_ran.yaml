@@ -72,13 +72,14 @@ explain:
   ghat_tail_k: [3,3,3,3,3,3,3,3,3,3,3]
   locality_k: 14
   save_tree: False
-  ground_explanations: True
+  ground_explanations: False
   corrupt_json: False
-  explanations: "all"
+  explanations: "best"
+  experiment: "alg"
 plotting:
   mode: "amt1"
   num_examples: 15
   output_pdf: "blank"
 feedback:
-  noise_reduction_rate: 0.866
-  correction_rate: 0.866
+  noise_reduction_rate: 1.0
+  correction_rate: 1.0

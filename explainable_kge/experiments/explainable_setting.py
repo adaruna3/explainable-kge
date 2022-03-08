@@ -108,14 +108,14 @@ if __name__ == "__main__":
     # 3. Train explainable model to predict each test triple
     locality_str = str(exp_config["explain"]["locality_k"]) if type(exp_config["explain"]["locality_k"]) == int else "best"
     corrupt_str = "corrupted" if exp_config["explain"]["corrupt_json"] else "clean"
-    if exp_config["explain"]["experiment"] == "alg":
+    if exp_config["explain"]["experiment"] in ["alg","feedback"]:
         results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str))
     elif exp_config["explain"]["experiment"] == "preferences":
         results_fp = os.path.join(sfe_fp, "{}.pkl".format(exp_config["explain"]["xmodel"] + "_" + exp_config["explain"]["locality"] + "_" + locality_str + "_" + corrupt_str + "_preferences"))
     else:
         logout("Experiment setting not recognized" + str(exp_config["explain"]["experiment"]), "f")
     if not os.path.exists(results_fp):
-        if exp_config["explain"]["experiment"] == "alg":
+        if exp_config["explain"]["experiment"] in ["alg","feedback"]:
             results = x_utils.get_explainable_results(exp_config, knn, exp_config["explain"]["locality_k"],
                                                     tr_de_d.r2i, tr_de_d.e2i, tr_de_d.i2e,
                                                     sfe_fp, results_fp, ent_embeddings,

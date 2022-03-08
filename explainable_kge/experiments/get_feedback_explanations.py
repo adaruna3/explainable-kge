@@ -216,7 +216,8 @@ def load_corrupt_json(args, main_fp):
 def store_corrupt_json(args, main_fp, exp_json, num):
     sfe_fp = os.path.join(main_fp, "results")
     locality_str = str(args["explain"]["locality_k"]) if type(args["explain"]["locality_k"]) == int else "best"
-    json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str + "_clean_filtered"
+    corrupt_str = "corrupted" if exp_config["explain"]["corrupt_json"] else "clean"
+    json_name = "explanations_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str  + "_" + corrupt_str + "_filtered"
     json_fp = os.path.join(sfe_fp, json_name + '.json')
     with open(json_fp, "w") as f:
         random.shuffle(exp_json)
@@ -242,12 +243,6 @@ if __name__ == "__main__":
 
     # GET REMOVES AND ADDS in explanations
     adds, removes, triple2example = get_updates(corr_json, tr_d.e2i, tr_d.r2i)
-    # DEBUG: SANITY CHECK
-    # clean_gt_triples = clean_tr_d.load_triples(["0_gt2id.txt"])
-    # trde_triples = np.unique(np.append(tr_d.triples, de_d.triples, axis=0), axis=0)
-    # removes = not_in_filter_triples(trde_triples, clean_gt_triples)
-    # adds = copy(clean_gt_triples)
-    # DEBUG: SANITY CHECK
 
     # FILTER REMOVES
     all_removes, classify_removes = filter_removes(removes, exp_fp, tr_d, de_d, clean_tr_d)
@@ -260,88 +255,19 @@ if __name__ == "__main__":
     # FILTER ADDS
     all_adds = filter_adds(adds, np.unique(removes,axis=0), clean_tr_d, clean_te_d)
     
-    # FILTER EXPLANATIONS EXAMPLES TO EXPORT
-    # select explanations for AMT
-    # add_examples = []
-    # for add in all_adds:
-    #     add_examples.append(triple2example[tuple(add)][0])
-    # remove_examples = []
-    # for remove in all_removes:
-    #     try:
-    #         remove_examples.append(triple2example[tuple(remove)][0])
-    #     except:
-    #         if in_filter_triples([remove],classify_removes).shape[0]:
-    #             continue
-    #         else:
-    #             pdb.set_trace()
-    # amt_ex_ids = list(set(add_examples).union(set(remove_examples)))
-    # amt_exs = [corr_json[amt_ex_id] for amt_ex_id in amt_ex_ids]
-    # store_corrupt_json(exp_config, exp_fp, amt_exs, 330)
-    # exit()
-    # FILTER EXPLANATIONS EXAMPLES TO EXPORT
-
-    # generate dataset with X% corrupions
-    tr_triples = tr_d.triples
-    de_triples = de_d.triples
-    gt_triples = tr_d.load_triples(["0_gt2id.txt"])
-
-    # set X% for removes and adds
-    partial = round(exp_config["feedback"]["noise_reduction_rate"] * all_removes.shape[0])
-    partial_idxs = np.random.choice(np.arange(all_removes.shape[0]), partial, False)
-    non_clean_cleanteneg_triples_partial = all_removes[partial_idxs,:]
-    partial = round(exp_config["feedback"]["correction_rate"] * all_adds.shape[0])
-    partial_idxs = np.random.choice(np.arange(all_adds.shape[0]), partial, False)
-    gttrde_only_adds_partial = all_adds[partial_idxs,:]
-
-    # generate tr & de dataset with X% corrupions
-    # first delete X% corrupt triples
-    tr_triples_updated = remove_triples(tr_triples, non_clean_cleanteneg_triples_partial)
-    print("Number of train set triples after remove corrupt: " + str(tr_triples_updated.shape[0]))
-    de_triples_updated = remove_triples(de_triples, non_clean_cleanteneg_triples_partial)
-    print("Number of dev set triples after remove corrupt: " + str(de_triples_updated.shape[0]))
-    gt_triples_updated = remove_triples(gt_triples, non_clean_cleanteneg_triples_partial)
-    print("Number of gt set triples after remove corrupt: " + str(gt_triples_updated.shape[0]))
-    # then add X% correct triples
-    tr_triples_add = extract_triples(gttrde_only_adds_partial, clean_tr_d.triples)
-    print("Number of triples to add to train set: " + str(tr_triples_add.shape[0]))
-    de_triples_add = extract_triples(gttrde_only_adds_partial, clean_de_d.triples)
-    print("Number of triples to add to valid set: " + str(de_triples_add.shape[0]))
-    tr_triples_updated = np.unique(np.append(tr_triples_updated, tr_triples_add, axis=0), axis=0)
-    print("New num train triples: " + str(tr_triples_updated.shape[0]))
-    de_triples_updated = np.unique(np.append(de_triples_updated, de_triples_add, axis=0), axis=0)
-    print("New num valid triples (+): " + str(de_triples_updated.shape[0]))
-    gt_triples_updated = np.unique(np.append(gt_triples_updated, gttrde_only_adds_partial, axis=0),axis=0)
-    print("New num gt triples: " + str(gt_triples_updated.shape[0]))
-
-    # output the partially corrupted dataset
-    tr_triples_updated[:, [1, 2]] = tr_triples_updated[:, [2, 1]]
-    de_triples_updated[:, [1, 2]] = de_triples_updated[:, [2, 1]]
-    gt_triples_updated[:, [1, 2]] = gt_triples_updated[:, [2, 1]]
-    np.random.shuffle(tr_triples_updated)
-    np.random.shuffle(de_triples_updated)
-    np.random.shuffle(gt_triples_updated)
-    partial_str1 = str(round(exp_config["feedback"]["noise_reduction_rate"] * 100))
-    partial_str2 = str(round(exp_config["feedback"]["correction_rate"] * 100))
-    original_dataset_fp = tr_d.fp[:-1]
-    # partially_corrupted_dataset_fp = original_dataset_fp + "_GT_DENOISED_" + partial_str1 + "_CORRECTED_" + partial_str2
-    partially_corrupted_dataset_fp = original_dataset_fp + "_DENOISED_" + partial_str1 + "_CORRECTED_" + partial_str2
-    if not os.path.exists(partially_corrupted_dataset_fp):
-        shutil.copytree(original_dataset_fp, partially_corrupted_dataset_fp)
-        with open(partially_corrupted_dataset_fp + "/0_train.txt", "w") as f:
-            for triple in tr_triples_updated:
-                str_triple = [tr_d.i2e[triple[0]],tr_d.i2e[triple[1]],tr_d.i2r[triple[2]]]
-                f.write("\t".join(str_triple) + "\n")
-        with open(partially_corrupted_dataset_fp + "/0_train2id.txt", "w") as f:
-            f.write(str(len(tr_triples_updated)) + "\n")
-            for triple in tr_triples_updated:
-                str_triple = [str(item) for item in triple]
-                f.write("\t".join(str_triple) + "\n")
-        with open(partially_corrupted_dataset_fp + "/0_valid2id.txt", "w") as f:
-            f.write(str(len(de_triples_updated)) + "\n")
-            for triple in de_triples_updated:
-                str_triple = [str(item) for item in triple]
-                f.write("\t".join(str_triple) + "\n")
-        with open(partially_corrupted_dataset_fp + "/0_gt2id.txt", "w") as f:
-            for triple in gt_triples_updated:
-                str_triple = [str(item) for item in triple]
-                f.write("\t".join(str_triple) + "\n")
+    # randomly select explanations for AMT
+    add_examples = []
+    for add in all_adds:
+        add_examples.append(triple2example[tuple(add)][0])
+    remove_examples = []
+    for remove in all_removes:
+        try:
+            remove_examples.append(triple2example[tuple(remove)][0])
+        except:
+            if in_filter_triples([remove],classify_removes).shape[0]:
+                continue
+            else:
+                pdb.set_trace()
+    amt_ex_ids = list(set(add_examples).union(set(remove_examples)))
+    amt_exs = [corr_json[amt_ex_id] for amt_ex_id in amt_ex_ids]
+    store_corrupt_json(exp_config, exp_fp, amt_exs, 330)
