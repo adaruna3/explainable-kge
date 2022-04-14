@@ -55,3 +55,4 @@ Next, for GPU usage check if `torch.cuda.is_available()` is `True`.
         - To generate the results from the paper, run [user_feedback_eval.sh](https://github.com/adaruna3/explainable-kge/blob/dev/explainable_kge/experiments/scripts/user_feedback_eval.sh) using: `./explainable_kge/experiments/scripts/user_feedback_eval.sh`
 
 ## ToDos
+1. Repo under construction, expect changes. Submission in review for publication.
