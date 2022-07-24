@@ -1,5 +1,5 @@
 # Explainable Knowledge Graph Embedding (XKGE)
-Supporting code for [Explainable Knowledge Graph Embedding: Inference Reconciliation for Knowledge Inferences Supporting Robot Actions]().
+Supporting code for [Explainable Knowledge Graph Embedding: Inference Reconciliation for Knowledge Inferences Supporting Robot Actions](https://arxiv.org/pdf/2205.01836.pdf).
 
 ## Pre-requisites
 1. This repo has been tested for a system running Ubuntu 18.04 LTS, PyTorch (1.2.0), and 
@@ -61,5 +61,5 @@ Next, for GPU usage check if `torch.cuda.is_available()` is `True`.
     - The simulation experiments are not yet included in this repo. Please see [rail_tasksim](https://github.com/GT-RAIL/rail_tasksim) for the simulator.
 
 ## ToDos
-- Repo closer to completion, expect more incremental changes..
+- Repo closer to completion, expect more incremental changes.
 - Add simulation experiment as part of demo code.
