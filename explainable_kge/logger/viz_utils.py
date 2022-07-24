@@ -1446,9 +1446,9 @@ def amt_plot_rq2(args):
     # load the amt results, tally answers, and score each turker individually
     amt_data = []
     amt_tally = {}
-    amt_folder = "amt_" + args["explain"]["xmodel"] + "_" + args["explain"]["locality"] + "_" + locality_str
-    amt_fp = os.path.join(results_fp, amt_folder)
+    amt_fp = os.path.join("explainable_kge", "amt_data", "user_feedback_study")
     amt_results_fps = [os.path.join(amt_fp, file) for file in os.listdir(amt_fp) if file.endswith(".json")]
+
     for i, amt_results_fp in enumerate(amt_results_fps):
         with open(amt_results_fp, "r") as f:
             turker_data = TurkerResult(json.load(f), amt_results_fp)
@@ -1488,14 +1488,16 @@ def amt_plot_rq2(args):
     correct_acc = np.append(correct_acc, [[np.mean(correct_acc[:,0]), np.mean(correct_acc[:,1])]], axis=0)
     correct_acc = np.append(correct_acc, [[np.std(correct_acc[:,0]), np.std(correct_acc[:,1])]], axis=0)
     m_prac, m_test_scores = get_majority_score(args, amt_tally, prac_json, test_json, gt_triples, gt_e2i, gt_r2i, 0)
-    shapiro_p_value, check, fig = test_normality(m_test_scores)
+    shapiro_p_value, skew_kurt_p_value, check, fig = test_normality(m_test_scores)
     figs.append(fig)
     if check:
         logout("Majority-vote turker feedback accuracy samples passed normality tests","s")
-        logout("P-value:" + str(shapiro_p_value),"i")
+        logout("Shapiro P-value:" + str(shapiro_p_value),"i")
+        logout("Skew/Kurt P-value:" + str(skew_kurt_p_value),"i")
     else:
         logout("Majority-vote turker feedback accuracy samples did not normality tests","e")
-        logout("P-value:" + str(shapiro_p_value),"i")
+        logout("Shapiro P-value:" + str(shapiro_p_value),"i")
+        logout("Skew/Kurt P-value:" + str(skew_kurt_p_value),"i")
     correct_acc = np.append(correct_acc, [[m_prac, np.mean(m_test_scores)]], axis=0)
     correct_acc = np.append(correct_acc, [[0.0, np.std(m_test_scores)]], axis=0)
     b_prac, b_test = get_best_turker_score(args, amt_tally, amt_data, test_json, gt_triples, gt_e2i, gt_r2i, 0)
@@ -1513,7 +1515,7 @@ def amt_plot_rq2(args):
                      figure_size=(5,6))
     figs.append(fig)
     us, totals, accs = get_chance_stats(args, amt_tally, test_json, gt_triples, gt_e2i, gt_r2i, 0)
-    figs += get_acc_vs_mrr_plot(args, (0.0,32.1), (100*np.mean(m_test_scores),69.9))
+    # figs += get_acc_vs_mrr_plot(args, (0.0,32.1), (100*np.mean(m_test_scores),69.9))
     chance_stats = []
     chance_prob = 0.0
     actul_acc = 0.0
@@ -1593,7 +1595,7 @@ if __name__ == "__main__":
     elif exp_config["plotting"]["mode"] == "amt2":
         figs += amt_plot_rq2(exp_config)
         main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))
-        figs_fp = os.path.join(main_fp, "results", "amt_{}.pdf".format(exp_config["explain"]["xmodel"]))
+        figs_fp = os.path.join(main_fp, "results", "amt_{}.pdf".format(exp_config["plotting"]["output_pdf"]))
     elif exp_config["plotting"]["mode"] == "cross_val_plot":
         figs += cross_val_plot(exp_config)
         main_fp = os.path.join("explainable_kge/logger/logs", exp_config["dataset"]["name"] + "_" + exp_config["model"]["name"] + "_" + str(exp_config["logging"]["log_num"]))

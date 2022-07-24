@@ -63,7 +63,17 @@ def setup_test_session(sess, args, model):
     load_args["sess"] = str(sess)
     model = model_utils.load_model(load_args, model)
 
-    return model
+    # loads the *CLEAN* test set
+    test_args = copy(args)
+    # pdb.set_trace()
+    test_args["dataset"]["name"] = "VH+_CLEAN_RAN"
+    test_args["dataset"]["set_name"] = str(args["logging"]["log_num"]) + "_test2id"
+    test_args["continual"]["session"] = str(args["logging"]["log_num"])
+    test_args["dataset"]["neg_ratio"] = 0
+    test_args["dataset"]["dataset_fps"] = None
+    test_bp = model_utils.DevBatchProcessor(test_args)
+
+    return model, test_bp
 
 
 if __name__ == "__main__":
@@ -107,8 +117,8 @@ if __name__ == "__main__":
         logout("Testing running...", "i")
         exp_tr_bp, exp_de_bp, exp_viz, exp_model, exp_optim, exp_tracker = setup_experiment(exp_config)
 
-        exp_model = setup_test_session(0, exp_config, exp_model)
-        inf_metrics = np.asarray([exp_de_bp.process_epoch(exp_model)])
+        exp_model, exp_te_bp = setup_test_session(0, exp_config, exp_model)
+        inf_metrics = np.asarray([exp_te_bp.process_epoch(exp_model)])
         log_test(inf_metrics, 0, 0,
                  exp_config["continual"]["num_sess"], "f", None, None,
                  exp_viz.log_fp, exp_config["logging"]["log_num"])
